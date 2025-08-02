@@ -1557,21 +1557,40 @@ Fleet Vehicle: ${truckNum}
     
     console.log(`🔄 Starting vehicle merge process for ${vehicleData.length} records`);
     
-    vehicleData.forEach((data, index) => {
-      // Use VIN as primary key, fallback to license plate, then a cleaned filename key
-      let key = '';
-      
-      if (data.vin && data.vin.length === 17) {
-        key = `VIN:${data.vin}`;
-      } else if (data.licensePlate && data.licensePlate.length >= 2) {
-        key = `PLATE:${data.licensePlate}`;
-      } else {
-        // Extract potential vehicle identifier from filename
-        const fileKey = this.extractVehicleKeyFromFilename(data.sourceFileName);
-        key = `FILE:${fileKey}`;
+    // First pass: analyze all vehicle identifiers to find patterns
+    const vinCounts: { [vin: string]: number } = {};
+    const plateCounts: { [plate: string]: number } = {};
+    const filePatterns: { [pattern: string]: number } = {};
+    
+    vehicleData.forEach(data => {
+      if (data.vin && data.vin.length >= 10) {
+        vinCounts[data.vin] = (vinCounts[data.vin] || 0) + 1;
       }
+      if (data.licensePlate && data.licensePlate.length >= 2) {
+        plateCounts[data.licensePlate] = (plateCounts[data.licensePlate] || 0) + 1;
+      }
+      const filePattern = this.extractVehicleKeyFromFilename(data.sourceFileName);
+      filePatterns[filePattern] = (filePatterns[filePattern] || 0) + 1;
+    });
+    
+    console.log(`📊 Vehicle identifier analysis:`, {
+      vins: Object.keys(vinCounts).length,
+      plates: Object.keys(plateCounts).length,
+      filePatterns: Object.keys(filePatterns).length,
+      vinCounts,
+      plateCounts,
+      filePatterns
+    });
+    
+    vehicleData.forEach((data, index) => {
+      // Smart key generation with multiple fallbacks
+      let key = this.generateSmartVehicleKey(data, vinCounts, plateCounts, filePatterns);
       
-      console.log(`📋 Processing record ${index + 1}: ${data.sourceFileName} -> Key: ${key}`);
+      console.log(`📋 Processing record ${index + 1}: ${data.sourceFileName} -> Key: ${key}`, {
+        vin: data.vin,
+        licensePlate: data.licensePlate,
+        documentType: data.documentType
+      });
       
       if (merged[key]) {
         // Merge data intelligently
@@ -1636,6 +1655,52 @@ Fleet Vehicle: ${truckNum}
     console.log(`🎯 Merge complete: ${vehicleData.length} records -> ${mergedArray.length} vehicles`);
     
     return mergedArray;
+  }
+
+  /**
+   * Generate smart vehicle key considering all available identifiers and their frequency
+   */
+  private generateSmartVehicleKey(
+    data: ExtractedVehicleData, 
+    vinCounts: { [vin: string]: number },
+    plateCounts: { [plate: string]: number },
+    filePatterns: { [pattern: string]: number }
+  ): string {
+    // Priority 1: Use VIN if it appears multiple times (indicates it's reliable)
+    if (data.vin && data.vin.length >= 10) {
+      const vinCount = vinCounts[data.vin] || 0;
+      if (vinCount > 1 || data.vin.length === 17) {
+        return `VIN:${data.vin}`;
+      }
+    }
+    
+    // Priority 2: Use license plate if it appears multiple times
+    if (data.licensePlate && data.licensePlate.length >= 2) {
+      const plateCount = plateCounts[data.licensePlate] || 0;
+      if (plateCount > 1) {
+        return `PLATE:${data.licensePlate}`;
+      }
+    }
+    
+    // Priority 3: Use filename pattern if it appears multiple times
+    const filePattern = this.extractVehicleKeyFromFilename(data.sourceFileName);
+    const patternCount = filePatterns[filePattern] || 0;
+    if (patternCount > 1) {
+      return `PATTERN:${filePattern}`;
+    }
+    
+    // Priority 4: Fall back to any VIN
+    if (data.vin && data.vin.length >= 10) {
+      return `VIN:${data.vin}`;
+    }
+    
+    // Priority 5: Fall back to any license plate
+    if (data.licensePlate && data.licensePlate.length >= 2) {
+      return `PLATE:${data.licensePlate}`;
+    }
+    
+    // Priority 6: Use filename pattern as last resort
+    return `FILE:${filePattern}`;
   }
 
   /**
@@ -1738,6 +1803,13 @@ Fleet Vehicle: ${truckNum}
         if (result.success && result.data) {
           const claudeData = result.data;
           const fileName = fileArray[index].name;
+          
+          console.log(`🔍 Processing Claude result for ${fileName}:`, {
+            documentType: claudeData.documentType,
+            vin: claudeData.extractedData.vin,
+            licensePlate: claudeData.extractedData.licensePlate,
+            confidence: claudeData.confidence
+          });
           
           // Convert to vehicle data if applicable
           if (['registration', 'insurance', 'inspection'].includes(claudeData.documentType)) {
