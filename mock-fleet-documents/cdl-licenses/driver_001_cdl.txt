@@ -1,0 +1,41 @@
+TEXAS DEPARTMENT OF PUBLIC SAFETY
+COMMERCIAL DRIVER LICENSE
+
+CDL Number: TX-CDL-45678912
+Driver Name: JOHN MICHAEL SMITH
+Date of Birth: 03/15/1985
+Address: 1234 Oak Street, Houston, TX 77001
+
+LICENSE DETAILS
+Class: A
+Issue Date: 05/20/2022
+Expiration Date: 03/15/2029
+Status: VALID
+
+ENDORSEMENTS
+H - Hazardous Materials
+N - Tank Vehicles
+X - Combination Tank/Hazmat
+P - Passenger Vehicle
+
+RESTRICTIONS
+L - No Air Brake Equipped CMV
+M - No Class A Passenger Vehicle
+N - No Class A & B Passenger Vehicle
+
+MEDICAL CERTIFICATION
+Medical Certificate Status: CERTIFIED
+Medical Certificate Expiration: 01/15/2026
+Self-Certification Type: NON-EXCEPTED INTERSTATE
+
+EMPLOYER INFORMATION
+Current Employer: SUNBELT TRUCKING LLC
+Employment Start Date: 06/01/2022
+Driver Type: COMPANY DRIVER
+
+VIOLATION HISTORY
+Last 3 Years: CLEAN RECORD
+CSA Score: SATISFACTORY
+Last Update: 01/15/2024
+
+Texas DPS - Commercial Driver License Division

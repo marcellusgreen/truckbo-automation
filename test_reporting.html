@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Compliance Reporting Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .test-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+        }
+        .button {
+            background: #3b82f6;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin: 5px;
+            font-size: 14px;
+        }
+        .button:hover {
+            background: #2563eb;
+        }
+        .button.secondary {
+            background: #6b7280;
+        }
+        .button.secondary:hover {
+            background: #4b5563;
+        }
+        .button.success {
+            background: #10b981;
+        }
+        .button.success:hover {
+            background: #059669;
+        }
+        .result {
+            margin-top: 15px;
+            padding: 15px;
+            border-radius: 6px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .success {
+            background: #f0fff4;
+            border: 1px solid #86efac;
+            color: #166534;
+        }
+        .info {
+            background: #f0f9ff;
+            border: 1px solid #7dd3fc;
+            color: #0c4a6e;
+        }
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .metric-card {
+            background: #f8fafc;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+            text-align: center;
+        }
+        .metric-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #1e40af;
+        }
+        .metric-label {
+            font-size: 12px;
+            color: #64748b;
+            margin-top: 5px;
+        }
+        h2 {
+            color: #1f2937;
+            border-bottom: 2px solid #3b82f6;
+            padding-bottom: 8px;
+        }
+        h3 {
+            color: #374151;
+            margin-top: 25px;
+        }
+        .report-preview {
+            background: #fafafa;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 20px;
+            margin: 15px 0;
+        }
+        .alert-critical {
+            background: #fef2f2;
+            border-left: 4px solid #ef4444;
+            padding: 10px;
+            margin: 5px 0;
+        }
+        .alert-warning {
+            background: #fffbeb;
+            border-left: 4px solid #f59e0b;
+            padding: 10px;
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 Compliance Reporting Test Suite</h1>
+        <p>Test the comprehensive compliance reporting system for fleet management.</p>
+
+        <!-- Setup Test Data -->
+        <div class="test-section">
+            <h3>📋 Setup Test Data</h3>
+            <p>First, add some test fleet and driver data to generate meaningful reports.</p>
+            <button class="button" onclick="setupTestData()">Setup Test Fleet & Drivers</button>
+            <button class="button secondary" onclick="clearAllData()">Clear All Data</button>
+            <div id="setupResult" class="result" style="display: none;"></div>
+        </div>
+
+        <!-- Compliance Metrics -->
+        <div class="test-section">
+            <h3>📈 Compliance Metrics</h3>
+            <button class="button" onclick="showComplianceMetrics()">Calculate Compliance Metrics</button>
+            <div id="metricsResult" class="result" style="display: none;"></div>
+        </div>
+
+        <!-- Report Generation -->
+        <div class="test-section">
+            <h3>📄 Report Generation</h3>
+            <div>
+                <button class="button" onclick="generateReport('vehicle')">Vehicle Compliance Report</button>
+                <button class="button" onclick="generateReport('driver')">Driver Compliance Report</button>
+                <button class="button" onclick="generateReport('expiration')">Expiration Summary</button>
+                <button class="button success" onclick="generateReport('full_audit')">Full Audit Report</button>
+            </div>
+            <div id="reportResult" class="result" style="display: none;"></div>
+        </div>
+
+        <!-- Export Testing -->
+        <div class="test-section">
+            <h3>💾 Export Testing</h3>
+            <p>Test report export functionality (generates downloadable files).</p>
+            <button class="button" onclick="testExportPDF()">Test PDF Export</button>
+            <button class="button" onclick="testExportCSV()">Test CSV Export</button>
+            <div id="exportResult" class="result" style="display: none;"></div>
+        </div>
+
+        <!-- Scheduled Reports -->
+        <div class="test-section">
+            <h3>⏰ Scheduled Reports</h3>
+            <p>Test automatic report scheduling functionality.</p>
+            <button class="button" onclick="scheduleReports('daily')">Schedule Daily Reports</button>
+            <button class="button" onclick="scheduleReports('weekly')">Schedule Weekly Reports</button>
+            <button class="button" onclick="scheduleReports('monthly')">Schedule Monthly Reports</button>
+            <div id="scheduleResult" class="result" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script type="module">
+        // Import services
+        import { reportingService } from './src/services/reportingService.ts';
+        import { persistentFleetStorage } from './src/services/persistentFleetStorage.ts';
+
+        // Make services available globally
+        window.reportingService = reportingService;
+        window.persistentFleetStorage = persistentFleetStorage;
+
+        // Test functions
+        window.setupTestData = function() {
+            try {
+                // Add test vehicles with various compliance states
+                const testVehicles = [
+                    {
+                        id: 'v1',
+                        vin: '1HGBH41JXMN109186',
+                        make: 'FREIGHTLINER',
+                        model: 'CASCADIA',
+                        year: 2022,
+                        licensePlate: 'TX123A',
+                        truckNumber: 'Truck #001',
+                        status: 'active',
+                        dateAdded: new Date().toISOString(),
+                        lastUpdated: new Date().toISOString(),
+                        registrationExpiry: '2024-12-31', // Expiring soon
+                        insuranceExpiry: '2024-11-15', // Expiring soon
+                        insuranceCarrier: 'Progressive Commercial',
+                        policyNumber: 'POL-001-2024'
+                    },
+                    {
+                        id: 'v2',
+                        vin: '1HGBH41JXMN109187',
+                        make: 'PETERBILT',
+                        model: '579',
+                        year: 2023,
+                        licensePlate: 'TX456B',
+                        truckNumber: 'Truck #002',
+                        status: 'active',
+                        dateAdded: new Date().toISOString(),
+                        lastUpdated: new Date().toISOString(),
+                        registrationExpiry: '2024-10-15', // Expired
+                        insuranceExpiry: '2024-10-01', // Expired
+                        insuranceCarrier: 'State Farm Commercial',
+                        policyNumber: 'POL-002-2024'
+                    },
+                    {
+                        id: 'v3',
+                        vin: '1HGBH41JXMN109188',
+                        make: 'KENWORTH',
+                        model: 'T680',
+                        year: 2024,
+                        licensePlate: 'TX789C',
+                        truckNumber: 'Truck #003',
+                        status: 'active',
+                        dateAdded: new Date().toISOString(),
+                        lastUpdated: new Date().toISOString(),
+                        registrationExpiry: '2025-06-30', // Compliant
+                        insuranceExpiry: '2025-05-31', // Compliant
+                        insuranceCarrier: 'Liberty Mutual',
+                        policyNumber: 'POL-003-2024'
+                    }
+                ];
+
+                // Add test drivers with various compliance states
+                const testDrivers = [
+                    {
+                        id: 'd1',
+                        firstName: 'John',
+                        lastName: 'Smith',
+                        employeeId: 'EMP001',
+                        dateOfBirth: '1985-03-15',
+                        status: 'active',
+                        dateAdded: new Date().toISOString(),
+                        lastUpdated: new Date().toISOString(),
+                        email: 'john.smith@company.com',
+                        phone: '555-123-4567',
+                        medicalCertificate: {
+                            certificateNumber: 'MED123456789',
+                            issuedDate: '2024-06-01',
+                            expirationDate: '2024-12-01', // Expiring soon
+                            examinerName: 'Dr. Sarah Johnson',
+                            examinerNationalRegistry: 'NR123456',
+                            restrictions: [],
+                            status: 'expiring_soon',
+                            daysUntilExpiry: 25
+                        },
+                        cdlInfo: {
+                            cdlNumber: 'CDLTX123456',
+                            cdlState: 'TX',
+                            issueDate: '2020-01-15',
+                            expirationDate: '2025-01-15',
+                            class: 'A',
+                            endorsements: ['H', 'N'],
+                            restrictions: [],
+                            status: 'valid',
+                            daysUntilExpiry: 120
+                        }
+                    },
+                    {
+                        id: 'd2',
+                        firstName: 'Maria',
+                        lastName: 'Rodriguez',
+                        employeeId: 'EMP002',
+                        dateOfBirth: '1990-07-22',
+                        status: 'active',
+                        dateAdded: new Date().toISOString(),
+                        lastUpdated: new Date().toISOString(),
+                        email: 'maria.rodriguez@company.com',
+                        phone: '555-456-7890',
+                        medicalCertificate: {
+                            certificateNumber: 'MED987654321',
+                            issuedDate: '2023-05-15',
+                            expirationDate: '2024-10-01', // Expired
+                            examinerName: 'Dr. Michael Chen',
+                            examinerNationalRegistry: 'NR789012',
+                            restrictions: [],
+                            status: 'expired',
+                            daysUntilExpiry: -30
+                        },
+                        cdlInfo: {
+                            cdlNumber: 'CDLTX987654',
+                            cdlState: 'TX',
+                            issueDate: '2019-03-10',
+                            expirationDate: '2024-11-20', // Expiring soon
+                            class: 'A',
+                            endorsements: ['N', 'P'],
+                            restrictions: [],
+                            status: 'expiring_soon',
+                            daysUntilExpiry: 45
+                        }
+                    }
+                ];
+
+                // Save test data
+                persistentFleetStorage.saveFleet(testVehicles);
+                testDrivers.forEach(driver => {
+                    persistentFleetStorage.addDriver(driver);
+                });
+
+                displayResult('setupResult', {
+                    success: true,
+                    message: `✅ Test data setup complete!
+                    
+Added ${testVehicles.length} test vehicles:
+• Truck #001 - Registration & insurance expiring soon
+• Truck #002 - Registration & insurance expired  
+• Truck #003 - All compliant
+
+Added ${testDrivers.length} test drivers:
+• John Smith - Medical cert expiring soon, CDL valid
+• Maria Rodriguez - Medical cert expired, CDL expiring soon
+
+Ready to generate compliance reports!`
+                }, 'Test Data Setup');
+
+            } catch (error) {
+                displayResult('setupResult', {
+                    success: false,
+                    error: error.message
+                }, 'Test Data Setup Error');
+            }
+        };
+
+        window.clearAllData = function() {
+            localStorage.removeItem('truckbo_fleet_data');
+            localStorage.removeItem('truckbo_drivers_data');
+            displayResult('setupResult', {
+                success: true,
+                message: '🗑️ All test data cleared!'
+            }, 'Clear Data');
+        };
+
+        window.showComplianceMetrics = function() {
+            try {
+                const metrics = reportingService.calculateComplianceMetrics();
+                
+                let metricsDisplay = `📊 COMPLIANCE METRICS OVERVIEW
+
+OVERALL COMPLIANCE: ${metrics.overallComplianceRate}%
+Vehicle Compliance: ${metrics.vehicleComplianceRate}%
+Driver Compliance: ${metrics.driverComplianceRate}%
+
+ALERTS:
+🚨 Critical Alerts: ${metrics.criticalAlerts}
+⚠️ High Priority: ${metrics.highPriorityAlerts}
+📅 Expiring Soon: ${metrics.expiringSoon}
+
+DOCUMENT BREAKDOWN:
+Total Documents: ${metrics.totalDocuments}
+
+`;
+
+                Object.entries(metrics.documentTypes).forEach(([type, stats]) => {
+                    metricsDisplay += `
+${type.replace('_', ' ').toUpperCase()}:
+  Total: ${stats.total}
+  ✅ Compliant: ${stats.compliant}
+  ⚠️ Expiring: ${stats.expiring}
+  ❌ Expired: ${stats.expired}`;
+                });
+
+                displayResult('metricsResult', {
+                    success: true,
+                    message: metricsDisplay
+                }, 'Compliance Metrics');
+
+            } catch (error) {
+                displayResult('metricsResult', {
+                    success: false,
+                    error: error.message
+                }, 'Metrics Error');
+            }
+        };
+
+        window.generateReport = function(type) {
+            try {
+                let report;
+                
+                switch (type) {
+                    case 'vehicle':
+                        report = reportingService.generateVehicleComplianceReport();
+                        break;
+                    case 'driver':
+                        report = reportingService.generateDriverComplianceReport();
+                        break;
+                    case 'expiration':
+                        report = reportingService.generateExpirationSummaryReport(90);
+                        break;
+                    case 'full_audit':
+                        report = reportingService.generateFullAuditReport();
+                        break;
+                }
+
+                let reportDisplay = `📋 ${report.title.toUpperCase()}
+
+Generated: ${new Date(report.generatedAt).toLocaleString()}
+Report ID: ${report.id}
+Period: ${report.dateRange.from} to ${report.dateRange.to}
+
+SUMMARY:
+✅ Compliant: ${report.summary.compliantCount}
+❌ Non-Compliant: ${report.summary.nonCompliantCount}
+⚠️ Expiring Soon: ${report.summary.expiringCount}
+
+`;
+
+                if (report.summary.criticalIssues.length > 0) {
+                    reportDisplay += `
+🚨 CRITICAL ISSUES:
+${report.summary.criticalIssues.map(issue => `• ${issue}`).join('\n')}
+`;
+                }
+
+                if (report.summary.recommendations.length > 0) {
+                    reportDisplay += `
+💡 RECOMMENDATIONS:
+${report.summary.recommendations.map(rec => `• ${rec}`).join('\n')}
+`;
+                }
+
+                reportDisplay += `
+📊 EXPORT OPTIONS:
+Available formats: ${report.exportFormats.join(', ')}
+
+Use the Export Testing section below to download this report.`;
+
+                // Store report for export testing
+                window.lastGeneratedReport = report;
+
+                displayResult('reportResult', {
+                    success: true,
+                    message: reportDisplay
+                }, `${report.title} Generated`);
+
+            } catch (error) {
+                displayResult('reportResult', {
+                    success: false,
+                    error: error.message
+                }, 'Report Generation Error');
+            }
+        };
+
+        window.testExportPDF = async function() {
+            if (!window.lastGeneratedReport) {
+                displayResult('exportResult', {
+                    success: false,
+                    error: 'No report generated yet. Generate a report first.'
+                }, 'Export Error');
+                return;
+            }
+
+            try {
+                await reportingService.exportToPDF(window.lastGeneratedReport);
+                displayResult('exportResult', {
+                    success: true,
+                    message: '📄 PDF export initiated! Check your downloads folder.'
+                }, 'PDF Export');
+            } catch (error) {
+                displayResult('exportResult', {
+                    success: false,
+                    error: error.message
+                }, 'PDF Export Error');
+            }
+        };
+
+        window.testExportCSV = async function() {
+            if (!window.lastGeneratedReport) {
+                displayResult('exportResult', {
+                    success: false,
+                    error: 'No report generated yet. Generate a report first.'
+                }, 'Export Error');
+                return;
+            }
+
+            try {
+                await reportingService.exportToExcel(window.lastGeneratedReport);
+                displayResult('exportResult', {
+                    success: true,
+                    message: '📊 CSV export initiated! Check your downloads folder.'
+                }, 'CSV Export');
+            } catch (error) {
+                displayResult('exportResult', {
+                    success: false,
+                    error: error.message
+                }, 'CSV Export Error');
+            }
+        };
+
+        window.scheduleReports = function(frequency) {
+            try {
+                reportingService.scheduleAutomaticReports(frequency);
+                displayResult('scheduleResult', {
+                    success: true,
+                    message: `⏰ ${frequency} reports scheduled successfully!
+                    
+The system will now automatically generate compliance reports ${frequency}.
+Critical compliance issues will be highlighted when found.`
+                }, `${frequency} Reports Scheduled`);
+            } catch (error) {
+                displayResult('scheduleResult', {
+                    success: false,
+                    error: error.message
+                }, 'Schedule Error');
+            }
+        };
+
+        function displayResult(elementId, result, title) {
+            const element = document.getElementById(elementId);
+            element.style.display = 'block';
+            
+            if (result.success) {
+                element.className = 'result success';
+                element.textContent = `${title}\n\n${result.message}`;
+            } else {
+                element.className = 'result info';
+                element.textContent = `${title}\n\nError: ${result.error}`;
+            }
+        }
+
+        // Auto-setup demo on page load
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                setupTestData();
+                setTimeout(() => {
+                    showComplianceMetrics();
+                }, 1000);
+            }, 500);
+        });
+    </script>
+</body>
+</html>

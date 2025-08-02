@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OCR Integration Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        button {
+            background: #3b82f6;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #2563eb;
+        }
+        .info {
+            background: #f3f4f6;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 10px 0;
+            border-left: 4px solid #3b82f6;
+        }
+        .result {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 10px 0;
+            border: 1px solid #dee2e6;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+        .error {
+            background: #fee;
+            color: #c53030;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 10px 0;
+            border: 1px solid #fed7d7;
+        }
+        .success {
+            background: #f0fff4;
+            color: #22543d;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 10px 0;
+            border: 1px solid #c6f6d5;
+        }
+        #fileInput {
+            padding: 10px;
+            border: 2px dashed #3b82f6;
+            border-radius: 6px;
+            margin: 10px 0;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 OCR Integration Test</h1>
+        <p>Test the new Tesseract.js OCR integration for document processing.</p>
+        
+        <div class="info">
+            <strong>Test Instructions:</strong>
+            <ol>
+                <li>Upload an image file (PNG, JPG) or PDF containing text</li>
+                <li>Click "Test OCR" to run text extraction</li>
+                <li>Review the extracted text results</li>
+                <li>Compare with fallback mock data if OCR fails</li>
+            </ol>
+        </div>
+
+        <div id="fileInput">
+            <input type="file" id="fileSelector" accept=".png,.jpg,.jpeg,.pdf" style="margin: 10px;">
+            <p>Select an image or PDF file to test OCR</p>
+        </div>
+
+        <button onclick="testOCR()">🔍 Test OCR</button>
+        <button onclick="clearResults()">Clear Results</button>
+        
+        <div id="result"></div>
+    </div>
+
+    <script type="module">
+        // Import the document processor
+        import { DocumentProcessor } from './src/services/documentProcessor.ts';
+
+        let selectedFile = null;
+        const processor = new DocumentProcessor();
+
+        document.getElementById('fileSelector').addEventListener('change', (event) => {
+            selectedFile = event.target.files[0];
+            if (selectedFile) {
+                document.getElementById('result').innerHTML = `
+                    <div class="info">
+                        <strong>File Selected:</strong> ${selectedFile.name}<br>
+                        <strong>Type:</strong> ${selectedFile.type}<br>
+                        <strong>Size:</strong> ${(selectedFile.size / 1024).toFixed(2)} KB
+                    </div>
+                `;
+            }
+        });
+
+        window.testOCR = async function() {
+            if (!selectedFile) {
+                document.getElementById('result').innerHTML = `
+                    <div class="error">
+                        ❌ Please select a file first.
+                    </div>
+                `;
+                return;
+            }
+
+            document.getElementById('result').innerHTML = `
+                <div class="info">
+                    🔄 Processing OCR for ${selectedFile.name}...<br>
+                    This may take a moment for real OCR processing.
+                </div>
+            `;
+
+            try {
+                // Create a simple document info object
+                const docInfo = {
+                    file: selectedFile,
+                    fileName: selectedFile.name,
+                    type: 'unknown',
+                    confidence: 0.5
+                };
+
+                // Test the OCR extraction directly
+                console.log('Starting OCR test for:', selectedFile.name);
+                
+                // Call the private OCR method through document processing
+                const files = new FileList();
+                // Simulate FileList with our single file
+                Object.defineProperty(files, '0', { value: selectedFile });
+                Object.defineProperty(files, 'length', { value: 1 });
+
+                const result = await processor.processBulkDocuments(files);
+                
+                document.getElementById('result').innerHTML = `
+                    <div class="success">
+                        ✅ OCR Processing Complete!
+                    </div>
+                    <div class="result">
+                        <strong>Processing Results:</strong>
+                        Total Files: ${result.summary.totalFiles}
+                        Processed: ${result.summary.processed}
+                        Errors: ${result.errors.length}
+                        
+                        <strong>Vehicle Data Found:</strong>
+                        ${JSON.stringify(result.vehicleData, null, 2)}
+                        
+                        <strong>Driver Data Found:</strong>
+                        ${JSON.stringify(result.driverData, null, 2)}
+                        
+                        <strong>Errors:</strong>
+                        ${JSON.stringify(result.errors, null, 2)}
+                    </div>
+                `;
+                
+            } catch (error) {
+                console.error('OCR test failed:', error);
+                document.getElementById('result').innerHTML = `
+                    <div class="error">
+                        ❌ OCR test failed: ${error.message}<br>
+                        Check the console for detailed error information.
+                    </div>
+                `;
+            }
+        };
+
+        window.clearResults = function() {
+            document.getElementById('result').innerHTML = '';
+            document.getElementById('fileSelector').value = '';
+            selectedFile = null;
+        };
+    </script>
+</body>
+</html>

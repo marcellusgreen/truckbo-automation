@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Document Upload Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 5px; }
+        .success { color: green; }
+        .error { color: red; }
+        .info { color: blue; }
+    </style>
+</head>
+<body>
+    <h1>🚛 TruckBo Document Processing Test</h1>
+    
+    <div class="test-section">
+        <h2>📋 Test Instructions</h2>
+        <ol>
+            <li><strong>Start TruckBo Application</strong>: Ensure http://localhost:5188 is running</li>
+            <li><strong>Navigate to Document Processing</strong>: Click "🤖 AI Document Processing" button</li>
+            <li><strong>Upload Mock Documents</strong>: Select the mock-fleet-documents folder</li>
+            <li><strong>Verify Processing</strong>: Check that files are recognized and processed</li>
+        </ol>
+    </div>
+
+    <div class="test-section">
+        <h2>📁 Available Test Files</h2>
+        <p class="info">Location: <code>mock-fleet-documents/</code></p>
+        <ul>
+            <li><strong>Registration Documents</strong>: 20 files (truck_001_registration.txt to truck_020_registration.txt)</li>
+            <li><strong>Insurance Documents</strong>: 20 files (truck_001_insurance.txt to truck_020_insurance.txt)</li>
+            <li><strong>Total Files</strong>: 40 documents for complete fleet testing</li>
+        </ul>
+    </div>
+
+    <div class="test-section">
+        <h2>✅ Expected Results</h2>
+        <ul>
+            <li>All 40 .txt files should be accepted (recently added .txt support)</li>
+            <li>Document classification: 20 registration + 20 insurance documents</li>
+            <li>Vehicle data extraction: VIN, license plate, make, model, year</li>
+            <li>Truck number auto-detection: TRK001 → "Truck #001", etc.</li>
+            <li>Processing confidence >0.7 for complete documents</li>
+            <li>20 unique vehicles with both registration and insurance data</li>
+        </ul>
+    </div>
+
+    <div class="test-section">
+        <h2>🐛 Troubleshooting</h2>
+        <h3>If No Files Are Processed:</h3>
+        <ul>
+            <li>Check browser console for error messages (F12 → Console)</li>
+            <li>Verify .txt files are being accepted by file input</li>
+            <li>Ensure document classification is working</li>
+            <li>Check if OCR/text extraction is returning valid data</li>
+        </ul>
+        
+        <h3>If Data Extraction Fails:</h3>
+        <ul>
+            <li>Verify regex patterns match document format</li>
+            <li>Check extraction confidence scores</li>
+            <li>Look for processing notes in extracted data</li>
+        </ul>
+    </div>
+
+    <div class="test-section">
+        <h2>🔍 Sample Data Validation</h2>
+        <p>For <strong>truck_001_registration.txt</strong>, expect:</p>
+        <ul>
+            <li><strong>VIN</strong>: 1XKWD49X1KJ123001</li>
+            <li><strong>License Plate</strong>: TRK001</li>
+            <li><strong>Truck Number</strong>: Truck #001 (auto-detected)</li>
+            <li><strong>Make</strong>: PETERBILT</li>
+            <li><strong>Model</strong>: 579</li>
+            <li><strong>Year</strong>: 2023</li>
+            <li><strong>DOT Number</strong>: 1234567</li>
+        </ul>
+    </div>
+
+    <div class="test-section">
+        <h2>🚀 Quick Test Actions</h2>
+        <p><a href="http://localhost:5188" target="_blank" class="info">→ Open TruckBo Application</a></p>
+        <p><strong>Test Steps</strong>:</p>
+        <ol>
+            <li>Click "🤖 AI Document Processing" in the Fleet Management interface</li>
+            <li>Choose "📁 Select Folder" and select the entire mock-fleet-documents folder</li>
+            <li>Click "🤖 Start AI Processing" and monitor progress</li>
+            <li>Review extracted data in the results screen</li>
+            <li>Click "✅ Add Vehicles to Fleet" to complete the test</li>
+        </ol>
+    </div>
+</body>
+</html>

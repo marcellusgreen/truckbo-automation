@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(npm run build:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:catalog.data.gov)",
+      "Bash(timeout 10 npm run dev)",
+      "Bash(npm run dev:*)",
+      "Bash(npx vite:*)",
+      "Bash(npx tsc:*)",
+      "WebFetch(domain:localhost)",
+      "Bash(npm start)",
+      "Bash(npm run:*)",
+      "Bash(mkdir:*)",
+      "Bash(node:*)",
+      "Bash(mv:*)",
+      "Bash(rm:*)",
+      "Bash(curl:*)",
+      "Bash(tail:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(npm install:*)",
+      "Bash(grep:*)",
+      "Bash(start test_driver_alerts.html)",
+      "Bash(cmd /c start:*)",
+      "Bash(psql:*)",
+      "Bash(\"C:\\Program Files\\PostgreSQL\\16\\bin\\psql.exe\" --version)",
+      "Bash(ls:*)",
+      "Bash(\"C:\\Program Files\\PostgreSQL\\17\\bin\\psql.exe\" --version)",
+      "Bash(\"C:\\Program Files\\PostgreSQL\\17\\bin\\psql.exe\" -h localhost -U postgres -d postgres -c \"SELECT version();\")",
+      "Bash(aws s3 mb:*)",
+      "Bash(taskkill:*)",
+      "Bash(vercel:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": []
+  }
+}

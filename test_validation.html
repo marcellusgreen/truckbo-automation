@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Validation Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .test-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+        }
+        .test-input {
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            margin: 5px;
+            width: 200px;
+        }
+        .test-button {
+            background: #3b82f6;
+            color: white;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .test-button:hover {
+            background: #2563eb;
+        }
+        .result {
+            margin-top: 15px;
+            padding: 15px;
+            border-radius: 6px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        .success {
+            background: #f0fff4;
+            border: 1px solid #86efac;
+            color: #166534;
+        }
+        .error {
+            background: #fef2f2;
+            border: 1px solid #fca5a5;
+            color: #dc2626;
+        }
+        .warning {
+            background: #fffbeb;
+            border: 1px solid #fcd34d;
+            color: #d97706;
+        }
+        h2 {
+            color: #1f2937;
+            border-bottom: 2px solid #3b82f6;
+            padding-bottom: 8px;
+        }
+        h3 {
+            color: #374151;
+            margin-top: 25px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Data Validation Test Suite</h1>
+        <p>Test the comprehensive data validation system for fleet management data.</p>
+
+        <!-- VIN Validation Test -->
+        <div class="test-section">
+            <h3>🚗 VIN Validation</h3>
+            <div>
+                <input type="text" id="vinInput" class="test-input" placeholder="Enter VIN" value="1HGBH41JXMN109186">
+                <button class="test-button" onclick="testVIN()">Validate VIN</button>
+                <button class="test-button" onclick="testInvalidVIN()">Test Invalid VIN</button>
+            </div>
+            <div id="vinResult" class="result" style="display: none;"></div>
+        </div>
+
+        <!-- Driver Info Validation Test -->
+        <div class="test-section">
+            <h3>👤 Driver Information Validation</h3>
+            <div>
+                <input type="text" id="firstNameInput" class="test-input" placeholder="First Name" value="John">
+                <input type="text" id="lastNameInput" class="test-input" placeholder="Last Name" value="Smith">
+                <input type="text" id="employeeIdInput" class="test-input" placeholder="Employee ID" value="EMP001">
+                <input type="date" id="dobInput" class="test-input" value="1985-03-15">
+            </div>
+            <div>
+                <input type="email" id="emailInput" class="test-input" placeholder="Email" value="john.smith@company.com">
+                <input type="tel" id="phoneInput" class="test-input" placeholder="Phone" value="555-123-4567">
+                <button class="test-button" onclick="testDriverInfo()">Validate Driver Info</button>
+            </div>
+            <div id="driverResult" class="result" style="display: none;"></div>
+        </div>
+
+        <!-- Medical Certificate Validation Test -->
+        <div class="test-section">
+            <h3>🏥 Medical Certificate Validation</h3>
+            <div>
+                <input type="text" id="certNumberInput" class="test-input" placeholder="Certificate Number" value="MED123456789">
+                <input type="date" id="issueDateInput" class="test-input" value="2024-06-01">
+                <input type="date" id="expiryDateInput" class="test-input" value="2025-06-01">
+            </div>
+            <div>
+                <input type="text" id="examinerInput" class="test-input" placeholder="Examiner Name" value="Dr. Sarah Johnson">
+                <input type="text" id="registryInput" class="test-input" placeholder="Registry Number" value="NR123456">
+                <button class="test-button" onclick="testMedicalCert()">Validate Medical Cert</button>
+            </div>
+            <div id="medicalResult" class="result" style="display: none;"></div>
+        </div>
+
+        <!-- CDL Validation Test -->
+        <div class="test-section">
+            <h3>🚛 CDL Validation</h3>
+            <div>
+                <input type="text" id="cdlNumberInput" class="test-input" placeholder="CDL Number" value="CDLTX123456">
+                <select id="cdlClassInput" class="test-input">
+                    <option value="A">Class A</option>
+                    <option value="B">Class B</option>
+                    <option value="C">Class C</option>
+                </select>
+                <input type="text" id="cdlStateInput" class="test-input" placeholder="State" value="TX">
+            </div>
+            <div>
+                <input type="date" id="cdlIssueDateInput" class="test-input" value="2020-01-15">
+                <input type="date" id="cdlExpiryDateInput" class="test-input" value="2025-01-15">
+                <button class="test-button" onclick="testCDL()">Validate CDL</button>
+            </div>
+            <div id="cdlResult" class="result" style="display: none;"></div>
+        </div>
+
+        <!-- Comprehensive Validation Test -->
+        <div class="test-section">
+            <h3>📋 Complete Driver Record Validation</h3>
+            <button class="test-button" onclick="testCompleteRecord()">Test Complete Driver Record</button>
+            <button class="test-button" onclick="testInvalidRecord()">Test Invalid Record</button>
+            <div id="completeResult" class="result" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script type="module">
+        // Import validation service
+        import { dataValidator } from './src/services/dataValidation.ts';
+
+        // Make validator available globally for tests
+        window.validator = dataValidator;
+
+        // Test functions
+        window.testVIN = function() {
+            const vin = document.getElementById('vinInput').value;
+            const result = validator.validateVIN(vin);
+            displayResult('vinResult', result, `VIN Validation: ${vin}`);
+        };
+
+        window.testInvalidVIN = function() {
+            const invalidVin = "INVALID123"; // Too short, invalid format
+            document.getElementById('vinInput').value = invalidVin;
+            const result = validator.validateVIN(invalidVin);
+            displayResult('vinResult', result, `VIN Validation: ${invalidVin}`);
+        };
+
+        window.testDriverInfo = function() {
+            const driverData = {
+                firstName: document.getElementById('firstNameInput').value,
+                lastName: document.getElementById('lastNameInput').value,
+                employeeId: document.getElementById('employeeIdInput').value,
+                dateOfBirth: document.getElementById('dobInput').value,
+                email: document.getElementById('emailInput').value,
+                phone: document.getElementById('phoneInput').value
+            };
+            
+            const result = validator.validateDriverInfo(driverData);
+            displayResult('driverResult', result, 'Driver Information Validation');
+        };
+
+        window.testMedicalCert = function() {
+            const medicalData = {
+                certificateNumber: document.getElementById('certNumberInput').value,
+                issuedDate: document.getElementById('issueDateInput').value,
+                expirationDate: document.getElementById('expiryDateInput').value,
+                examinerName: document.getElementById('examinerInput').value,
+                examinerNationalRegistry: document.getElementById('registryInput').value
+            };
+            
+            const result = validator.validateMedicalCertificate(medicalData);
+            displayResult('medicalResult', result, 'Medical Certificate Validation');
+        };
+
+        window.testCDL = function() {
+            const cdlData = {
+                cdlNumber: document.getElementById('cdlNumberInput').value,
+                cdlClass: document.getElementById('cdlClassInput').value,
+                cdlState: document.getElementById('cdlStateInput').value,
+                cdlIssueDate: document.getElementById('cdlIssueDateInput').value,
+                cdlExpirationDate: document.getElementById('cdlExpiryDateInput').value,
+                cdlEndorsements: ['H', 'N']
+            };
+            
+            const result = validator.validateCDL(cdlData);
+            displayResult('cdlResult', result, 'CDL Validation');
+        };
+
+        window.testCompleteRecord = function() {
+            const completeDriver = {
+                firstName: 'John',
+                lastName: 'Smith',
+                employeeId: 'EMP001',
+                dateOfBirth: '1985-03-15',
+                email: 'john.smith@company.com',
+                phone: '555-123-4567',
+                medicalCertificate: {
+                    certificateNumber: 'MED123456789',
+                    issuedDate: '2024-06-01',
+                    expirationDate: '2025-06-01',
+                    examinerName: 'Dr. Sarah Johnson',
+                    examinerNationalRegistry: 'NR123456'
+                },
+                cdlInfo: {
+                    cdlNumber: 'CDLTX123456',
+                    cdlClass: 'A',
+                    cdlState: 'TX',
+                    cdlIssueDate: '2020-01-15',
+                    cdlExpirationDate: '2025-01-15',
+                    cdlEndorsements: ['H', 'N']
+                }
+            };
+            
+            const result = validator.validateDriverRecord(completeDriver);
+            displayResult('completeResult', result, 'Complete Driver Record Validation');
+        };
+
+        window.testInvalidRecord = function() {
+            const invalidDriver = {
+                firstName: '', // Missing required field
+                lastName: '123Invalid!', // Invalid characters
+                employeeId: 'X', // Too short
+                dateOfBirth: '2010-01-01', // Too young
+                email: 'invalid-email', // Invalid format
+                phone: '123', // Too short
+                medicalCertificate: {
+                    certificateNumber: '', // Missing
+                    issuedDate: '2025-01-01', // Future date
+                    expirationDate: '2024-01-01', // Before issue date
+                    examinerName: 'Invalid123', // Invalid format
+                    examinerNationalRegistry: 'X' // Too short
+                },
+                cdlInfo: {
+                    cdlNumber: '', // Missing
+                    cdlClass: 'Z', // Invalid class
+                    cdlState: 'XX', // Invalid state
+                    cdlEndorsements: ['Q', 'Z'] // Invalid endorsements
+                }
+            };
+            
+            const result = validator.validateDriverRecord(invalidDriver);
+            displayResult('completeResult', result, 'Invalid Driver Record Validation');
+        };
+
+        function displayResult(elementId, result, title) {
+            const element = document.getElementById(elementId);
+            element.style.display = 'block';
+            
+            let content = `${title}\n\n`;
+            
+            if (result.isValid && result.warnings.length === 0) {
+                element.className = 'result success';
+                content += '✅ VALIDATION PASSED\nAll checks completed successfully!';
+            } else {
+                let hasErrors = result.errors.length > 0;
+                element.className = hasErrors ? 'result error' : 'result warning';
+                
+                if (hasErrors) {
+                    content += `❌ VALIDATION FAILED (${result.errors.length} errors)\n\n`;
+                    result.errors.forEach(error => {
+                        content += `• ${error.field}: ${error.message}\n`;
+                    });
+                } else {
+                    content += '✅ VALIDATION PASSED WITH WARNINGS\n\n';
+                }
+                
+                if (result.warnings.length > 0) {
+                    content += `\n⚠️ WARNINGS (${result.warnings.length}):\n`;
+                    result.warnings.forEach(warning => {
+                        content += `• ${warning.field}: ${warning.message}\n`;
+                        if (warning.suggestion) {
+                            content += `  Suggestion: ${warning.suggestion}\n`;
+                        }
+                    });
+                }
+            }
+            
+            element.textContent = content;
+        }
+
+        // Auto-run a demo test on page load
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                testVIN();
+            }, 500);
+        });
+    </script>
+</body>
+</html>

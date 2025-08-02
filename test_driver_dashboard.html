@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Driver Management Test Data</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        button {
+            background: #3b82f6;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #2563eb;
+        }
+        .success {
+            background: #10b981;
+            color: white;
+            padding: 10px;
+            border-radius: 6px;
+            margin: 10px 0;
+        }
+        .info {
+            background: #f3f4f6;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 10px 0;
+            border-left: 4px solid #3b82f6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧪 Driver Management Test Data</h1>
+        <p>This script will add sample driver data to test the driver management dashboard.</p>
+        
+        <div class="info">
+            <strong>Sample Drivers to Add:</strong>
+            <ul>
+                <li>📋 <strong>John Smith</strong> - Medical cert expiring in 15 days</li>
+                <li>🚨 <strong>Maria Rodriguez</strong> - Medical cert expired 5 days ago</li>
+                <li>✅ <strong>David Johnson</strong> - All compliant (120 days remaining)</li>  
+                <li>⚠️ <strong>Sarah Williams</strong> - CDL expiring in 25 days</li>
+            </ul>
+        </div>
+
+        <button onclick="addSampleDrivers()">Add Sample Drivers</button>
+        <button onclick="clearDrivers()">Clear All Drivers</button>
+        <button onclick="viewDrivers()">View Current Drivers</button>
+        
+        <div id="result"></div>
+    </div>
+
+    <script>
+        function addSampleDrivers() {
+            const today = new Date();
+            
+            const sampleDrivers = [
+                {
+                    employeeId: 'EMP001',
+                    firstName: 'John',
+                    lastName: 'Smith',
+                    dateOfBirth: '1985-03-15',
+                    hireDate: '2022-01-10',
+                    status: 'active',
+                    
+                    cdlInfo: {
+                        cdlNumber: 'CDL123456789',
+                        cdlState: 'CA',
+                        issueDate: '2020-01-15',
+                        expirationDate: '2025-01-15',
+                        class: 'A',
+                        endorsements: ['H', 'N', 'P'],
+                        restrictions: []
+                    },
+                    
+                    medicalCertificate: {
+                        certificateNumber: 'MED789456123',
+                        issuedDate: '2024-06-01',
+                        expirationDate: formatDate(new Date(today.getTime() + 15 * 24 * 60 * 60 * 1000)), // 15 days from now
+                        examinerName: 'Dr. Sarah Johnson',
+                        examinerNationalRegistry: 'NR123456',
+                        restrictions: []
+                    },
+                    
+                    email: 'john.smith@company.com',
+                    phone: '555-0123'
+                },
+                {
+                    employeeId: 'EMP002',
+                    firstName: 'Maria',
+                    lastName: 'Rodriguez',
+                    dateOfBirth: '1990-07-22',
+                    hireDate: '2021-05-15',
+                    status: 'active',
+                    
+                    cdlInfo: {
+                        cdlNumber: 'CDL987654321',
+                        cdlState: 'TX',
+                        issueDate: '2019-03-10',
+                        expirationDate: '2027-03-10',
+                        class: 'A',
+                        endorsements: ['N', 'P'],
+                        restrictions: []
+                    },
+                    
+                    medicalCertificate: {
+                        certificateNumber: 'MED456789012',
+                        issuedDate: '2023-05-15',
+                        expirationDate: formatDate(new Date(today.getTime() - 5 * 24 * 60 * 60 * 1000)), // 5 days ago (expired)
+                        examinerName: 'Dr. Michael Chen',
+                        examinerNationalRegistry: 'NR789012',
+                        restrictions: []
+                    },
+                    
+                    email: 'maria.rodriguez@company.com',
+                    phone: '555-0456'
+                },
+                {
+                    employeeId: 'EMP003',
+                    firstName: 'David',
+                    lastName: 'Johnson',
+                    dateOfBirth: '1982-11-08',
+                    hireDate: '2020-08-01',
+                    status: 'active',
+                    
+                    cdlInfo: {
+                        cdlNumber: 'CDL555666777',
+                        cdlState: 'FL',
+                        issueDate: '2018-05-20',
+                        expirationDate: '2026-05-20',
+                        class: 'B',
+                        endorsements: ['P', 'S'],
+                        restrictions: []
+                    },
+                    
+                    medicalCertificate: {
+                        certificateNumber: 'MED111222333',
+                        issuedDate: '2024-08-01',
+                        expirationDate: formatDate(new Date(today.getTime() + 120 * 24 * 60 * 60 * 1000)), // 120 days from now
+                        examinerName: 'Dr. Lisa Davis',
+                        examinerNationalRegistry: 'NR345678',
+                        restrictions: []
+                    },
+                    
+                    email: 'david.johnson@company.com',
+                    phone: '555-0789'
+                },
+                {
+                    employeeId: 'EMP004',
+                    firstName: 'Sarah',
+                    lastName: 'Williams',
+                    dateOfBirth: '1988-05-12',
+                    hireDate: '2023-02-01',
+                    status: 'active',
+                    
+                    cdlInfo: {
+                        cdlNumber: 'CDL888999000',
+                        cdlState: 'NY',
+                        issueDate: '2022-12-01',
+                        expirationDate: formatDate(new Date(today.getTime() + 25 * 24 * 60 * 60 * 1000)), // 25 days from now
+                        class: 'A',
+                        endorsements: ['H', 'N', 'T'],
+                        restrictions: []
+                    },
+                    
+                    medicalCertificate: {
+                        certificateNumber: 'MED777888999',
+                        issuedDate: '2024-07-01',
+                        expirationDate: formatDate(new Date(today.getTime() + 180 * 24 * 60 * 60 * 1000)), // 180 days from now
+                        examinerName: 'Dr. Robert Wilson',
+                        examinerNationalRegistry: 'NR901234',
+                        restrictions: []
+                    },
+                    
+                    email: 'sarah.williams@company.com',
+                    phone: '555-0321'
+                }
+            ];
+
+            let successCount = 0;
+            sampleDrivers.forEach(driver => {
+                // Simulate adding driver to storage
+                const drivers = JSON.parse(localStorage.getItem('truckbo_drivers_data') || '[]');
+                
+                // Check for duplicates
+                const exists = drivers.some(d => d.employeeId === driver.employeeId);
+                if (!exists) {
+                    const newDriver = {
+                        ...driver,
+                        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+                        dateAdded: new Date().toISOString(),
+                        lastUpdated: new Date().toISOString()
+                    };
+                    drivers.push(newDriver);
+                    successCount++;
+                }
+            });
+            
+            localStorage.setItem('truckbo_drivers_data', JSON.stringify(drivers));
+            
+            document.getElementById('result').innerHTML = `
+                <div class="success">
+                    ✅ Successfully added ${successCount} sample drivers to the system!<br>
+                    🔗 <strong>Now go to the Driver Management page in your app to see them in action.</strong>
+                </div>
+            `;
+        }
+
+        function clearDrivers() {
+            localStorage.removeItem('truckbo_drivers_data');
+            document.getElementById('result').innerHTML = `
+                <div class="success">
+                    🗑️ All driver data cleared from storage.
+                </div>
+            `;
+        }
+
+        function viewDrivers() {
+            const drivers = JSON.parse(localStorage.getItem('truckbo_drivers_data') || '[]');
+            let html = `<div class="info"><strong>Current Drivers (${drivers.length}):</strong><ul>`;
+            
+            if (drivers.length === 0) {
+                html += '<li>No drivers found</li>';
+            } else {
+                drivers.forEach(driver => {
+                    html += `<li>${driver.firstName} ${driver.lastName} (${driver.employeeId})</li>`;
+                });
+            }
+            
+            html += '</ul></div>';
+            document.getElementById('result').innerHTML = html;
+        }
+
+        function formatDate(date) {
+            return date.toISOString().split('T')[0];
+        }
+
+        // Auto-load current drivers on page load
+        window.onload = function() {
+            viewDrivers();
+        };
+    </script>
+</body>
+</html>

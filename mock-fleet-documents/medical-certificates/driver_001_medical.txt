@@ -1,0 +1,30 @@
+DOT MEDICAL EXAMINATION CERTIFICATE
+
+Certificate Number: MED-TX-2024-001-4578
+Driver Name: JOHN MICHAEL SMITH
+Date of Birth: 03/15/1985
+License Number: TX-CDL-45678912
+
+MEDICAL EXAMINATION
+Issue Date: 01/15/2024
+Expiration Date: 01/15/2026
+Medical Examiner: Dr. Sarah Johnson, MD
+National Registry Number: 1234567890
+
+EXAMINATION RESULTS:
+Physical Qualification: QUALIFIED
+Medical Variance: NONE
+Restrictions: CORRECTIVE LENSES REQUIRED
+
+CERTIFYING MEDICAL EXAMINER:
+Dr. Sarah Johnson, MD
+Texas Medical License: TX-MD-89012
+National Registry ID: 1234567890
+Clinic: Dallas Commercial Driver Medical Center
+Address: 1234 Main St, Dallas, TX 75201
+Phone: (214) 555-0123
+
+This certificate certifies that the above-named driver has been medically examined and is physically qualified to operate a commercial motor vehicle in accordance with the Federal Motor Carrier Safety Regulations.
+
+Date Issued: January 15, 2024
+Examiner Signature: Dr. Sarah Johnson, MD
