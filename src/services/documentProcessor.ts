@@ -1767,6 +1767,292 @@ Fleet Vehicle: ${truckNum}
   }
 
   /**
+   * Detect and remove duplicate records, keeping the most recent document
+   */
+  private detectAndRemoveDuplicates<T extends ExtractedVehicleData | ExtractedDriverData>(
+    records: T[], 
+    recordType: 'vehicle' | 'driver'
+  ): T[] {
+    console.log(`🔍 Starting duplicate detection for ${records.length} ${recordType} records`);
+    
+    const duplicateGroups: { [key: string]: T[] } = {};
+    const uniqueRecords: T[] = [];
+    const removedDuplicates: { key: string; removed: T[]; kept: T }[] = [];
+    
+    // Group records by unique identifiers
+    records.forEach(record => {
+      const duplicateKeys = this.generateDuplicateKeys(record, recordType);
+      let foundDuplicate = false;
+      
+      // Check if this record matches any existing group
+      for (const key of duplicateKeys) {
+        if (duplicateGroups[key]) {
+          duplicateGroups[key].push(record);
+          foundDuplicate = true;
+          break;
+        }
+      }
+      
+      // If not a duplicate, create new group(s)
+      if (!foundDuplicate) {
+        const primaryKey = duplicateKeys[0]; // Use the first (most reliable) key
+        duplicateGroups[primaryKey] = [record];
+      }
+    });
+    
+    // Process each group of potential duplicates
+    Object.entries(duplicateGroups).forEach(([key, group]) => {
+      if (group.length === 1) {
+        // No duplicates, keep the single record
+        uniqueRecords.push(group[0]);
+      } else {
+        // Duplicates found - select the best record
+        console.log(`📋 Found ${group.length} duplicates for key: ${key}`);
+        
+        const bestRecord = this.selectBestRecord(group, recordType);
+        const removedRecords = group.filter(r => r !== bestRecord);
+        
+        uniqueRecords.push(bestRecord);
+        removedDuplicates.push({
+          key,
+          removed: removedRecords,
+          kept: bestRecord
+        });
+        
+        // Log duplicate removal details
+        console.log(`🗑️ Removed ${removedRecords.length} duplicates for ${key}:`, {
+          kept: {
+            source: bestRecord.sourceFileName,
+            confidence: bestRecord.extractionConfidence,
+            documentDate: this.getDocumentDate(bestRecord, recordType)
+          },
+          removed: removedRecords.map(r => ({
+            source: r.sourceFileName,
+            confidence: r.extractionConfidence,
+            documentDate: this.getDocumentDate(r, recordType)
+          }))
+        });
+      }
+    });
+    
+    // Add processing notes about duplicates
+    removedDuplicates.forEach(({ key, removed, kept }) => {
+      if (!kept.processingNotes) kept.processingNotes = [];
+      kept.processingNotes.push(
+        `Duplicate detection: Kept this record over ${removed.length} duplicate(s) for ${key}`
+      );
+      kept.processingNotes.push(
+        `Removed sources: ${removed.map(r => r.sourceFileName).join(', ')}`
+      );
+    });
+    
+    console.log(`✅ Duplicate detection complete: ${records.length} → ${uniqueRecords.length} records (removed ${records.length - uniqueRecords.length} duplicates)`);
+    
+    return uniqueRecords;
+  }
+
+  /**
+   * Generate multiple duplicate detection keys for a record
+   */
+  private generateDuplicateKeys<T extends ExtractedVehicleData | ExtractedDriverData>(
+    record: T, 
+    recordType: 'vehicle' | 'driver'
+  ): string[] {
+    const keys: string[] = [];
+    
+    if (recordType === 'vehicle') {
+      const vehicleRecord = record as ExtractedVehicleData;
+      
+      // Primary key: VIN (most reliable)
+      if (vehicleRecord.vin && vehicleRecord.vin.length >= 10) {
+        keys.push(`VIN:${vehicleRecord.vin.toUpperCase()}`);
+      }
+      
+      // Secondary key: Registration number + state
+      if (vehicleRecord.registrationNumber && vehicleRecord.registrationState) {
+        keys.push(`REG:${vehicleRecord.registrationState}:${vehicleRecord.registrationNumber}`);
+      }
+      
+      // Tertiary key: License plate + state
+      if (vehicleRecord.licensePlate && vehicleRecord.registrationState) {
+        keys.push(`PLATE:${vehicleRecord.registrationState}:${vehicleRecord.licensePlate}`);
+      }
+      
+      // Quaternary key: Policy number (for insurance documents)
+      if (vehicleRecord.policyNumber) {
+        keys.push(`POLICY:${vehicleRecord.policyNumber}`);
+      }
+      
+    } else {
+      const driverRecord = record as ExtractedDriverData;
+      
+      // Primary key: CDL number + state
+      if (driverRecord.cdlNumber && driverRecord.cdlState) {
+        keys.push(`CDL:${driverRecord.cdlState}:${driverRecord.cdlNumber}`);
+      }
+      
+      // Secondary key: Medical certificate number
+      if (driverRecord.medicalCertNumber) {
+        keys.push(`MED:${driverRecord.medicalCertNumber}`);
+      }
+      
+      // Tertiary key: Employee ID (if available)
+      if (driverRecord.employeeId) {
+        keys.push(`EMP:${driverRecord.employeeId}`);
+      }
+      
+      // Quaternary key: Full name + DOB
+      if (driverRecord.firstName && driverRecord.lastName && driverRecord.dateOfBirth) {
+        const fullName = `${driverRecord.firstName} ${driverRecord.lastName}`.toLowerCase();
+        keys.push(`NAME:${fullName}:${driverRecord.dateOfBirth}`);
+      }
+    }
+    
+    return keys;
+  }
+
+  /**
+   * Select the best record from a group of duplicates
+   */
+  private selectBestRecord<T extends ExtractedVehicleData | ExtractedDriverData>(
+    duplicates: T[], 
+    recordType: 'vehicle' | 'driver'
+  ): T {
+    console.log(`🏆 Selecting best record from ${duplicates.length} duplicates`);
+    
+    // Score each record based on multiple criteria
+    const scoredRecords = duplicates.map(record => ({
+      record,
+      score: this.calculateRecordScore(record, recordType)
+    }));
+    
+    // Sort by score (highest first)
+    scoredRecords.sort((a, b) => b.score - a.score);
+    
+    const bestRecord = scoredRecords[0].record;
+    
+    console.log(`📊 Record scores:`, scoredRecords.map(sr => ({
+      source: sr.record.sourceFileName,
+      score: sr.score,
+      confidence: sr.record.extractionConfidence
+    })));
+    
+    return bestRecord;
+  }
+
+  /**
+   * Calculate quality score for a record to determine the best duplicate
+   */
+  private calculateRecordScore<T extends ExtractedVehicleData | ExtractedDriverData>(
+    record: T, 
+    recordType: 'vehicle' | 'driver'
+  ): number {
+    let score = 0;
+    
+    // Base score from extraction confidence (0-100 points)
+    score += (record.extractionConfidence || 0) * 100;
+    
+    // Document recency bonus (0-50 points)
+    const documentDate = this.getDocumentDate(record, recordType);
+    if (documentDate) {
+      const daysSinceDocument = (Date.now() - documentDate.getTime()) / (1000 * 60 * 60 * 24);
+      const recencyScore = Math.max(0, 50 - (daysSinceDocument / 365) * 10); // Lose 10 points per year
+      score += recencyScore;
+    }
+    
+    // Completeness bonus (0-30 points)
+    const completenessScore = this.calculateCompletenessScore(record, recordType);
+    score += completenessScore;
+    
+    // Source reliability bonus (0-20 points)
+    const sourceScore = this.calculateSourceReliabilityScore(record.sourceFileName);
+    score += sourceScore;
+    
+    return score;
+  }
+
+  /**
+   * Extract the most relevant date from a record for recency comparison
+   */
+  private getDocumentDate<T extends ExtractedVehicleData | ExtractedDriverData>(
+    record: T, 
+    recordType: 'vehicle' | 'driver'
+  ): Date | null {
+    let dateString: string | undefined;
+    
+    if (recordType === 'vehicle') {
+      const vehicleRecord = record as ExtractedVehicleData;
+      // Prefer registration expiry, then insurance expiry
+      dateString = vehicleRecord.registrationExpiry || vehicleRecord.insuranceExpiry;
+    } else {
+      const driverRecord = record as ExtractedDriverData;
+      // Prefer CDL expiry, then medical expiry
+      dateString = driverRecord.cdlExpirationDate || driverRecord.medicalExpirationDate;
+    }
+    
+    if (!dateString) return null;
+    
+    const date = new Date(dateString);
+    return isNaN(date.getTime()) ? null : date;
+  }
+
+  /**
+   * Calculate completeness score based on critical fields present
+   */
+  private calculateCompletenessScore<T extends ExtractedVehicleData | ExtractedDriverData>(
+    record: T, 
+    recordType: 'vehicle' | 'driver'
+  ): number {
+    if (recordType === 'vehicle') {
+      const vehicleRecord = record as ExtractedVehicleData;
+      const criticalFields = [
+        vehicleRecord.vin,
+        vehicleRecord.licensePlate,
+        vehicleRecord.make,
+        vehicleRecord.model,
+        vehicleRecord.year
+      ];
+      const presentFields = criticalFields.filter(field => field && field.toString().length > 0).length;
+      return (presentFields / criticalFields.length) * 30;
+    } else {
+      const driverRecord = record as ExtractedDriverData;
+      const criticalFields = [
+        driverRecord.firstName,
+        driverRecord.lastName,
+        driverRecord.cdlNumber,
+        driverRecord.cdlExpirationDate
+      ];
+      const presentFields = criticalFields.filter(field => field && field.toString().length > 0).length;
+      return (presentFields / criticalFields.length) * 30;
+    }
+  }
+
+  /**
+   * Calculate source reliability score based on filename patterns
+   */
+  private calculateSourceReliabilityScore(fileName: string): number {
+    const lowerFileName = fileName.toLowerCase();
+    
+    // Government/official sources get highest score
+    if (lowerFileName.includes('dmv') || lowerFileName.includes('dot') || lowerFileName.includes('official')) {
+      return 20;
+    }
+    
+    // Insurance company sources get high score
+    if (lowerFileName.includes('insurance') || lowerFileName.includes('policy')) {
+      return 15;
+    }
+    
+    // Registration documents get medium score
+    if (lowerFileName.includes('registration') || lowerFileName.includes('reg')) {
+      return 10;
+    }
+    
+    // Default score for other sources
+    return 5;
+  }
+
+  /**
    * Enhanced document processing using Claude Vision API
    * This is the new primary method for processing unstructured documents
    */
@@ -1894,11 +2180,25 @@ Fleet Vehicle: ${truckNum}
         documentsRequiringReview: claudeResults.filter(r => r.success && r.data?.requiresReview).length
       };
       
-      onProgress?.(100, `Processing complete! Found ${vehicleData.length} vehicles and ${driverData.length} drivers`);
+      onProgress?.(85, 'Detecting and removing duplicates...');
+      
+      // Apply duplicate detection before merging
+      const deduplicatedVehicleData = this.detectAndRemoveDuplicates(vehicleData, 'vehicle');
+      const deduplicatedDriverData = this.detectAndRemoveDuplicates(driverData, 'driver');
+      
+      onProgress?.(95, 'Merging related documents...');
+      
+      // Update processing stats with duplicate information
+      processingStats.duplicatesRemoved = {
+        vehicles: vehicleData.length - deduplicatedVehicleData.length,
+        drivers: driverData.length - deduplicatedDriverData.length
+      };
+      
+      onProgress?.(100, `Processing complete! Found ${deduplicatedVehicleData.length} vehicles and ${deduplicatedDriverData.length} drivers`);
       
       return {
-        vehicleData: this.mergeVehicleData(vehicleData),
-        driverData,
+        vehicleData: this.mergeVehicleData(deduplicatedVehicleData),
+        driverData: deduplicatedDriverData,
         processingStats,
         claudeResults
       };
