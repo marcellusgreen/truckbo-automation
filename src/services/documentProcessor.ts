@@ -1553,9 +1553,27 @@ Fleet Vehicle: ${truckNum}
    * Intelligently combines registration, insurance, and other documents for the same vehicle
    */
   private mergeVehicleData(vehicleData: ExtractedVehicleData[]): ExtractedVehicleData[] {
-    const merged: { [key: string]: ExtractedVehicleData } = {};
-    
+    console.log(`🔍 DEBUG: Input data analysis`);
     console.log(`🔄 Starting vehicle merge process for ${vehicleData.length} records`);
+    
+    // Debug: Show all VINs being processed
+    console.log(`\n📋 DETAILED INPUT ANALYSIS:`);
+    vehicleData.forEach((data, index) => {
+      console.log(`Record ${index + 1} (${data.sourceFileName}):`);
+      console.log(`  Raw VIN: "${data.vin}"`);
+      console.log(`  Normalized VIN: "${data.vin ? data.vin.replace(/[^A-Z0-9]/g, '').toUpperCase() : 'NONE'}"`);
+      console.log(`  License Plate: "${data.licensePlate}"`);
+      console.log(`  Document Type: "${data.documentType}"`);
+      console.log(`  Make/Model/Year: "${data.make}" / "${data.model}" / ${data.year}`);
+      console.log(`  Confidence: ${data.extractionConfidence}`);
+      console.log(`---`);
+    });
+    
+    const merged: { [key: string]: ExtractedVehicleData } = {};
+    const mergeLog: string[] = [];
+    const keyLog: { [key: string]: string[] } = {}; // Track which files use each key
+    
+    mergeLog.push(`Starting merge for ${vehicleData.length} records`);
     
     // First pass: analyze all vehicle identifiers to find patterns
     const vinCounts: { [vin: string]: number } = {};
@@ -1564,16 +1582,18 @@ Fleet Vehicle: ${truckNum}
     
     vehicleData.forEach(data => {
       if (data.vin && data.vin.length >= 10) {
-        vinCounts[data.vin] = (vinCounts[data.vin] || 0) + 1;
+        const cleanVin = data.vin.replace(/\s+/g, '').toUpperCase();
+        vinCounts[cleanVin] = (vinCounts[cleanVin] || 0) + 1;
       }
       if (data.licensePlate && data.licensePlate.length >= 2) {
-        plateCounts[data.licensePlate] = (plateCounts[data.licensePlate] || 0) + 1;
+        const cleanPlate = data.licensePlate.replace(/\s+/g, '').toUpperCase();
+        plateCounts[cleanPlate] = (plateCounts[cleanPlate] || 0) + 1;
       }
       const filePattern = this.extractVehicleKeyFromFilename(data.sourceFileName);
       filePatterns[filePattern] = (filePatterns[filePattern] || 0) + 1;
     });
     
-    console.log(`📊 Vehicle identifier analysis:`, {
+    console.log(`\n📊 Vehicle identifier analysis:`, {
       vins: Object.keys(vinCounts).length,
       plates: Object.keys(plateCounts).length,
       filePatterns: Object.keys(filePatterns).length,
@@ -1582,20 +1602,29 @@ Fleet Vehicle: ${truckNum}
       filePatterns
     });
     
+    mergeLog.push(`Analysis found: ${Object.keys(vinCounts).length} unique VINs, ${Object.keys(plateCounts).length} unique plates`);
+    
+    console.log(`\n🔑 KEY GENERATION AND MERGING PROCESS:`);
     vehicleData.forEach((data, index) => {
       // Smart key generation with multiple fallbacks
       let key = this.generateSmartVehicleKey(data, vinCounts, plateCounts, filePatterns);
       
-      console.log(`📋 Processing record ${index + 1}: ${data.sourceFileName} -> Key: ${key}`, {
-        vin: data.vin,
-        licensePlate: data.licensePlate,
-        documentType: data.documentType
-      });
+      console.log(`\n📋 Processing record ${index + 1}: ${data.sourceFileName}`);
+      console.log(`  Generated key: "${key}"`);
+      console.log(`  VIN: "${data.vin}" | Plate: "${data.licensePlate}" | Type: "${data.documentType}"`);
+      
+      // Track which files use each key
+      if (!keyLog[key]) keyLog[key] = [];
+      keyLog[key].push(data.sourceFileName);
       
       if (merged[key]) {
         // Merge data intelligently
         const existing = merged[key];
-        console.log(`🔗 Merging with existing record for ${key}`);
+        console.log(`🔗 DUPLICATE DETECTED! Merging with existing key: "${key}"`);
+        console.log(`  Previous file: ${existing.sourceFileName}`);
+        console.log(`  Current file: ${data.sourceFileName}`);
+        console.log(`  Files using this key: [${keyLog[key].join(', ')}]`);
+        mergeLog.push(`MERGED: ${data.sourceFileName} with existing record (key: ${key})`);
         
         merged[key] = {
           // Use the more complete VIN and license plate
@@ -1647,12 +1676,40 @@ Fleet Vehicle: ${truckNum}
           ...data,
           lastUpdated: new Date().toISOString()
         };
-        console.log(`✅ Added new vehicle record for ${key}`);
+        console.log(`✅ NEW RECORD for key: "${key}"`);
+        console.log(`  First file with this key: ${data.sourceFileName}`);
+        mergeLog.push(`NEW: ${data.sourceFileName} created new record (key: ${key})`);
       }
     });
     
     const mergedArray = Object.values(merged);
-    console.log(`🎯 Merge complete: ${vehicleData.length} records -> ${mergedArray.length} vehicles`);
+    console.log(`\n🎯 FINAL MERGE RESULTS:`);
+    console.log(`Original records: ${vehicleData.length} -> Final vehicles: ${mergedArray.length}`);
+    
+    // Show detailed key usage summary
+    console.log(`\n🔑 KEY USAGE SUMMARY:`);
+    Object.entries(keyLog).forEach(([key, files]) => {
+      console.log(`Key "${key}": ${files.length} files`);
+      files.forEach((file, index) => {
+        console.log(`  ${index + 1}. ${file}`);
+      });
+    });
+    
+    // Log detailed merge summary
+    console.log(`\n📋 MERGE SUMMARY:`);
+    mergeLog.forEach(log => console.log(`   ${log}`));
+    
+    const mergedCount = mergeLog.filter(log => log.startsWith('MERGED:')).length;
+    const newCount = mergeLog.filter(log => log.startsWith('NEW:')).length;
+    console.log(`\n📊 Final Stats: ${mergedCount} merges performed, ${newCount} new records created`);
+    
+    if (newCount === 1 && mergedCount === vehicleData.length - 1) {
+      console.log(`✅ SUCCESS: Perfect merge! All ${vehicleData.length} files merged into 1 vehicle`);
+    } else if (newCount === vehicleData.length) {
+      console.log(`❌ NO MERGING: All files created separate vehicles (merging failed)`);
+    } else {
+      console.log(`⚠️ PARTIAL MERGE: ${vehicleData.length} files -> ${newCount} vehicles`);
+    }
     
     return mergedArray;
   }
@@ -1666,41 +1723,43 @@ Fleet Vehicle: ${truckNum}
     plateCounts: { [plate: string]: number },
     filePatterns: { [pattern: string]: number }
   ): string {
-    // Priority 1: Use VIN if it appears multiple times (indicates it's reliable)
-    if (data.vin && data.vin.length >= 10) {
-      const vinCount = vinCounts[data.vin] || 0;
-      if (vinCount > 1 || data.vin.length === 17) {
-        return `VIN:${data.vin}`;
+    // Priority 1: Use VALID VIN (exactly 17 characters)
+    if (data.vin) {
+      const cleanVin = data.vin.replace(/[^A-Z0-9]/g, '').toUpperCase();
+      if (cleanVin.length === 17) { // EXACT length check
+        console.log(`🔑 Using VIN key: ${cleanVin} (from file: ${data.sourceFileName})`);
+        return `VIN:${cleanVin}`;
+      }
+      // If VIN exists but isn't 17 chars, log for debugging
+      console.log(`⚠️ Invalid VIN length (${cleanVin.length}): ${cleanVin} from ${data.sourceFileName}`);
+    }
+
+    // Priority 2: Use license plate
+    if (data.licensePlate) {
+      const cleanPlate = data.licensePlate.replace(/[^A-Z0-9]/g, '').toUpperCase();
+      if (cleanPlate.length >= 2) {
+        console.log(`🔑 Using PLATE key: ${cleanPlate} (from file: ${data.sourceFileName})`);
+        return `PLATE:${cleanPlate}`;
       }
     }
     
-    // Priority 2: Use license plate if it appears multiple times
-    if (data.licensePlate && data.licensePlate.length >= 2) {
-      const plateCount = plateCounts[data.licensePlate] || 0;
-      if (plateCount > 1) {
-        return `PLATE:${data.licensePlate}`;
-      }
-    }
-    
-    // Priority 3: Use filename pattern if it appears multiple times
+    // Priority 3: Use filename pattern analysis
     const filePattern = this.extractVehicleKeyFromFilename(data.sourceFileName);
-    const patternCount = filePatterns[filePattern] || 0;
-    if (patternCount > 1) {
+    if (filePattern && filePattern !== 'UNKNOWN') {
+      console.log(`🔑 Using PATTERN key: ${filePattern} (from file: ${data.sourceFileName})`);
       return `PATTERN:${filePattern}`;
     }
     
-    // Priority 4: Fall back to any VIN
-    if (data.vin && data.vin.length >= 10) {
-      return `VIN:${data.vin}`;
+    // Priority 4: Use vehicle make/model/year combination if available
+    if (data.make && data.model && data.year) {
+      const vehicleKey = `${data.make}_${data.model}_${data.year}`.replace(/\s+/g, '_').toUpperCase();
+      console.log(`🔑 Using VEHICLE key: ${vehicleKey} (from file: ${data.sourceFileName})`);
+      return `VEHICLE:${vehicleKey}`;
     }
     
-    // Priority 5: Fall back to any license plate
-    if (data.licensePlate && data.licensePlate.length >= 2) {
-      return `PLATE:${data.licensePlate}`;
-    }
-    
-    // Priority 6: Use filename pattern as last resort
-    return `FILE:${filePattern}`;
+    // Priority 5: Fall back to filename if nothing else works
+    console.log(`🔑 Using FILE key: ${data.sourceFileName} (no reliable identifiers found)`);
+    return `FILE:${data.sourceFileName}`;
   }
 
   /**
@@ -2100,9 +2159,9 @@ Fleet Vehicle: ${truckNum}
           // Convert to vehicle data if applicable
           if (['registration', 'insurance', 'inspection'].includes(claudeData.documentType)) {
             const vehicleRecord: ExtractedVehicleData = {
-              // Vehicle identification
-              vin: claudeData.extractedData.vin || '',
-              licensePlate: claudeData.extractedData.licensePlate || '',
+              // Vehicle identification (normalize VIN and plate for consistent merging)
+              vin: claudeData.extractedData.vin ? claudeData.extractedData.vin.replace(/\s+/g, '').toUpperCase() : '',
+              licensePlate: claudeData.extractedData.licensePlate ? claudeData.extractedData.licensePlate.replace(/\s+/g, '').toUpperCase() : '',
               make: claudeData.extractedData.make || '',
               model: claudeData.extractedData.model || '',
               year: parseInt(claudeData.extractedData.year || '0') || 0,
@@ -2127,7 +2186,9 @@ Fleet Vehicle: ${truckNum}
               lastUpdated: new Date().toISOString()
             };
             
-            vehicleData.push(vehicleRecord);
+            // Normalize extracted data immediately for consistent merging
+            const normalizedVehicleRecord = this.normalizeExtractedData(vehicleRecord);
+            vehicleData.push(normalizedVehicleRecord);
           }
           
           // Convert to driver data if applicable
@@ -2180,25 +2241,36 @@ Fleet Vehicle: ${truckNum}
         documentsRequiringReview: claudeResults.filter(r => r.success && r.data?.requiresReview).length
       };
       
-      onProgress?.(85, 'Detecting and removing duplicates...');
+      onProgress?.(85, 'Merging related documents...');
       
-      // Apply duplicate detection before merging
-      const deduplicatedVehicleData = this.detectAndRemoveDuplicates(vehicleData, 'vehicle');
-      const deduplicatedDriverData = this.detectAndRemoveDuplicates(driverData, 'driver');
+      // First: Merge documents that belong to the same vehicle/driver
+      const mergedVehicleData = this.mergeVehicleData(vehicleData);
+      const mergedDriverData = driverData; // No merging for drivers yet
       
-      onProgress?.(95, 'Merging related documents...');
+      onProgress?.(90, 'Detecting and removing remaining duplicates...');
       
-      // Update processing stats with duplicate information
-      processingStats.duplicatesRemoved = {
-        vehicles: vehicleData.length - deduplicatedVehicleData.length,
-        drivers: driverData.length - deduplicatedDriverData.length
+      // Second: Remove any remaining true duplicates after merging
+      const finalVehicleData = this.detectAndRemoveDuplicates(mergedVehicleData, 'vehicle');
+      const finalDriverData = this.detectAndRemoveDuplicates(mergedDriverData, 'driver');
+      
+      // Update processing stats with merge and duplicate information
+      processingStats.mergeStats = {
+        originalVehicles: vehicleData.length,
+        afterMerge: mergedVehicleData.length,
+        finalVehicles: finalVehicleData.length,
+        documentsPerVehicle: vehicleData.length / (finalVehicleData.length || 1)
       };
       
-      onProgress?.(100, `Processing complete! Found ${deduplicatedVehicleData.length} vehicles and ${deduplicatedDriverData.length} drivers`);
+      processingStats.duplicatesRemoved = {
+        vehicles: mergedVehicleData.length - finalVehicleData.length,
+        drivers: mergedDriverData.length - finalDriverData.length
+      };
+      
+      onProgress?.(100, `Processing complete! Found ${finalVehicleData.length} vehicles and ${finalDriverData.length} drivers`);
       
       return {
-        vehicleData: this.mergeVehicleData(deduplicatedVehicleData),
-        driverData: deduplicatedDriverData,
+        vehicleData: finalVehicleData,
+        driverData: finalDriverData,
         processingStats,
         claudeResults
       };
@@ -2252,6 +2324,80 @@ Fleet Vehicle: ${truckNum}
         fallbackReason: 'Claude processing failed or returned no results'
       }
     };
+  }
+
+  /**
+   * Normalize extracted data immediately after Claude processing for consistent merging
+   */
+  private normalizeExtractedData(data: ExtractedVehicleData): ExtractedVehicleData {
+    console.log(`🧹 Normalizing data from ${data.sourceFileName}:`, {
+      originalVin: data.vin,
+      originalPlate: data.licensePlate
+    });
+    
+    const normalized = {
+      ...data,
+      vin: data.vin ? this.normalizeVin(data.vin) : '',
+      licensePlate: data.licensePlate ? this.normalizeLicensePlate(data.licensePlate) : '',
+    };
+    
+    console.log(`✨ Normalized result:`, {
+      normalizedVin: normalized.vin,
+      normalizedPlate: normalized.licensePlate,
+      vinChanged: data.vin !== normalized.vin,
+      plateChanged: data.licensePlate !== normalized.licensePlate
+    });
+    
+    return normalized;
+  }
+
+  /**
+   * Normalize VIN with OCR error correction
+   */
+  private normalizeVin(vin: string): string {
+    if (!vin) return '';
+    
+    console.log(`🔧 Normalizing VIN: "${vin}"`);
+    
+    // Step 1: Remove all non-alphanumeric characters and convert to uppercase
+    const cleaned = vin.replace(/[^A-Z0-9]/g, '').toUpperCase();
+    console.log(`   Cleaned: "${cleaned}" (${cleaned.length} chars)`);
+    
+    // Step 2: Apply common OCR fixes only if we have a reasonable length
+    if (cleaned.length >= 15 && cleaned.length <= 19) {
+      const fixed = cleaned
+        .replace(/O(?=\d)/g, '0')  // O -> 0 when followed by digit
+        .replace(/(?<=\d)O/g, '0') // O -> 0 when preceded by digit
+        .replace(/I(?=\d)/g, '1')  // I -> 1 when followed by digit  
+        .replace(/(?<=\d)I/g, '1') // I -> 1 when preceded by digit
+        .replace(/S(?=\d)/g, '5')  // S -> 5 when followed by digit
+        .replace(/(?<=\d)S/g, '5') // S -> 5 when preceded by digit
+        .replace(/G(?=\d)/g, '6')  // G -> 6 when followed by digit
+        .replace(/(?<=\d)G/g, '6'); // G -> 6 when preceded by digit
+      
+      console.log(`   OCR fixed: "${fixed}" (${fixed.length} chars)`);
+      
+      // Only return the fixed version if it results in exactly 17 characters
+      if (fixed.length === 17) {
+        console.log(`✅ VIN normalized successfully: ${vin} -> ${fixed}`);
+        return fixed;
+      }
+    }
+    
+    // Return cleaned version if OCR fixes don't help or result isn't 17 chars
+    console.log(`⚠️ VIN normalization incomplete: ${vin} -> ${cleaned} (${cleaned.length} chars)`);
+    return cleaned;
+  }
+
+  /**
+   * Normalize license plate
+   */
+  private normalizeLicensePlate(plate: string): string {
+    if (!plate) return '';
+    
+    const normalized = plate.replace(/[^A-Z0-9]/g, '').toUpperCase();
+    console.log(`🚗 License plate normalized: "${plate}" -> "${normalized}"`);
+    return normalized;
   }
 }
 

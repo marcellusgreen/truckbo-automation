@@ -263,9 +263,34 @@ class ClaudeVisionProcessor {
    * Build extraction prompt for image documents
    */
   private buildExtractionPrompt(expectedDocumentType?: string): string {
-    return `You are an expert document processor specializing in commercial trucking compliance documents with advanced edge case detection.
+    return `You are an expert document processor specializing in commercial trucking compliance documents with advanced noise filtering and OCR error correction.
 
-CRITICAL MISSION: Extract data while identifying conflicts, validation issues, and edge cases to minimize manual review.
+CRITICAL MISSION: Extract ONLY compliance-relevant data while filtering noise and correcting OCR errors to minimize manual review.
+
+🔍 DOCUMENT NOISE FILTERING - IGNORE:
+- Headers/footers with page numbers, watermarks, logos
+- Navigation elements, form instructions, disclaimers  
+- Boilerplate text like "For office use only", "Do not write below this line"
+- Repeated legal text, terms and conditions, privacy notices
+- Barcode data, QR codes, reference numbers unless they're document IDs
+- Form field labels that don't contain actual data
+- Administrative stamps that don't affect compliance status
+
+⚡ OCR ERROR CORRECTION - APPLY:
+- Common character substitutions: 0↔O, 1↔I↔l, 5↔S, 8↔B, 6↔G
+- Fix "rn" → "m", "vv" → "w", "cl" → "d" patterns
+- Correct space insertions in VINs, license plates, policy numbers
+- Fix date format corruptions (slashes, dots, spaces)
+- Repair partial words in vehicle makes/models using context
+
+📋 FOCUS ONLY ON COMPLIANCE DATA:
+- Vehicle identification (VIN, license plate, make/model/year)
+- Driver information (name, license number, endorsements)
+- Document dates (issue, expiration, effective dates)
+- Insurance details (policy number, company, coverage amounts)
+- Medical certificate information
+- Registration details and authority information
+- DOT numbers and permit information
 
 Analyze this document image and extract all relevant information. The document could be:
 - Vehicle registration
@@ -343,24 +368,44 @@ Return your analysis as a JSON object with this EXACT structure:
   "autoApprovalRecommended": true
 }
 
-ENHANCED VALIDATION RULES:
+🎯 COMPLIANCE-FOCUSED EXTRACTION RULES:
 1. **VIN Validation**: Must be exactly 17 characters, alphanumeric (no I, O, Q)
 2. **Date Validation**: 
    - Issue dates should be in the past
    - Expiry dates should be future but realistic (not >10 years out)
    - Flag dates before 2020 or after 2030 as suspicious
 3. **Data Completeness**:
-   - Registration MUST have: VIN, licensePlate, expirationDate
-   - Insurance MUST have: VIN or licensePlate, policyNumber, expirationDate
-   - CDL MUST have: driverName, licenseNumber, expirationDate
+   - Registration MUST have: VIN, licensePlate, expirationDate, state
+   - Insurance MUST have: VIN or licensePlate, policyNumber, expirationDate, coverageAmount
+   - CDL MUST have: driverName, licenseNumber, expirationDate, state, licenseClass
    - Medical MUST have: driverName, expirationDate, medicalCertificateNumber
 
-CONFLICT DETECTION:
+📋 PRIORITIZED FIELD EXTRACTION (extract in order of importance):
+**CRITICAL FIELDS (always extract):**
+- VIN numbers (17 characters, check for spaces/OCR errors)
+- License plates (state format validation)
+- Expiration dates (MM/DD/YYYY, MM-DD-YYYY, Month DD, YYYY)
+- Driver names (First Last format for CDL/Medical docs)
+- Policy numbers (alphanumeric, often with hyphens)
+
+**HIGH PRIORITY (extract if clearly visible):**
+- Issue dates, effective dates
+- Vehicle make/model/year (validate against known commercial brands)
+- Insurance company names, coverage amounts
+- State codes (2-letter abbreviations)
+- DOT numbers, Medical examiner information
+
+**MEDIUM PRIORITY (extract if confident):**
+- License classes, endorsements, restrictions
+- Registration numbers, owner names
+- Document numbers, authority information
+
+🔍 CONFLICT DETECTION:
 - Multiple values for same field in document (choose most confident)
 - Contradictory information (flag for review)
 - Cross-field validation failures (VIN format vs year mismatch)
 
-SMART AUTO-APPROVAL CRITERIA:
+✅ SMART AUTO-APPROVAL CRITERIA:
 - Overall confidence > 90%
 - No missing critical fields
 - No validation failures  
@@ -368,7 +413,7 @@ SMART AUTO-APPROVAL CRITERIA:
 - No significant conflicts detected
 → Set autoApprovalRecommended: true
 
-REQUIRE REVIEW IF:
+⚠️ REQUIRE REVIEW IF:
 - Confidence < 80%
 - Missing critical fields
 - Invalid VIN format
@@ -377,12 +422,13 @@ REQUIRE REVIEW IF:
 - Poor image quality affecting extraction
 → Set requiresReview: true, autoApprovalRecommended: false
 
-FIELD CONFIDENCE SCORING:
+📊 FIELD CONFIDENCE SCORING:
 Rate each extracted field 0.0-1.0 based on:
-- Text clarity in image
-- Data validation success
-- Cross-field consistency
-- Format correctness
+- Text clarity in image/document
+- Data validation success (format, realistic values)
+- Cross-field consistency (dates align, VIN matches year)
+- Format correctness (proper patterns for field type)
+- Context validation (field appears in appropriate section)
 
 Only include fields actually present in document. Use null for missing fields.`;
   }
@@ -391,14 +437,42 @@ Only include fields actually present in document. Use null for missing fields.`;
    * Build extraction prompt for text documents
    */
   private buildTextExtractionPrompt(text: string, expectedDocumentType?: string): string {
-    return `You are an expert document processor specializing in commercial trucking compliance documents with advanced edge case detection.
+    // Apply text preprocessing to filter noise and correct OCR errors
+    const cleanedText = this.preprocessDocumentText(text);
+    
+    return `You are an expert document processor specializing in commercial trucking compliance documents with advanced noise filtering and OCR error correction.
 
-CRITICAL MISSION: Extract data while identifying conflicts, validation issues, and edge cases to minimize manual review.
+CRITICAL MISSION: Extract ONLY compliance-relevant data while filtering noise and correcting OCR errors to minimize manual review.
 
-Analyze this document text and extract all relevant information:
+🔍 DOCUMENT NOISE FILTERING - IGNORE:
+- Headers/footers with page numbers, watermarks, company logos
+- Navigation elements, form instructions, legal disclaimers  
+- Boilerplate text like "For office use only", "Do not write below this line"
+- Repeated legal text, terms and conditions, privacy notices
+- Barcode data, QR codes, reference numbers unless they're document IDs
+- Form field labels that don't contain actual data
+- Administrative stamps that don't affect compliance status
 
-DOCUMENT TEXT:
-${text}
+⚡ OCR ERROR CORRECTION - APPLY:
+- Common character substitutions: 0↔O, 1↔I↔l, 5↔S, 8↔B, 6↔G
+- Fix "rn" → "m", "vv" → "w", "cl" → "d" patterns
+- Correct space insertions in VINs, license plates, policy numbers
+- Fix date format corruptions (slashes, dots, spaces)
+- Repair partial words in vehicle makes/models using context
+
+📋 FOCUS ONLY ON COMPLIANCE DATA:
+- Vehicle identification (VIN, license plate, make/model/year)
+- Driver information (name, license number, endorsements)
+- Document dates (issue, expiration, effective dates)
+- Insurance details (policy number, company, coverage amounts)
+- Medical certificate information
+- Registration details and authority information
+- DOT numbers and permit information
+
+Analyze this cleaned document text and extract all relevant information:
+
+CLEANED DOCUMENT TEXT:
+${cleanedText}
 
 ${expectedDocumentType ? `The user expects this to be a ${expectedDocumentType} document.` : ''}
 
@@ -1381,6 +1455,193 @@ Focus on:
     }
     
     return results;
+  }
+
+  /**
+   * Preprocess document text to filter noise and correct OCR errors
+   */
+  private preprocessDocumentText(text: string): string {
+    console.log('🧹 Preprocessing document text to filter noise and correct OCR errors...');
+    
+    let cleanedText = text;
+    
+    // Step 1: Filter out common document noise patterns
+    cleanedText = this.filterDocumentNoise(cleanedText);
+    
+    // Step 2: Apply OCR error corrections
+    cleanedText = this.correctOCRErrors(cleanedText);
+    
+    // Step 3: Clean up whitespace and formatting
+    cleanedText = this.normalizeWhitespace(cleanedText);
+    
+    console.log(`✅ Text preprocessing complete: ${text.length} → ${cleanedText.length} characters`);
+    return cleanedText;
+  }
+
+  /**
+   * Filter out common document noise (headers, footers, boilerplate)
+   */
+  private filterDocumentNoise(text: string): string {
+    const lines = text.split('\n');
+    const filteredLines: string[] = [];
+    
+    // Patterns to identify noise
+    const noisePatterns = [
+      // Page numbers and headers
+      /^\s*Page\s+\d+\s+of\s+\d+\s*$/i,
+      /^\s*\d+\s*$/,  // Standalone numbers (likely page numbers)
+      /^\s*\d+\s*\/\s*\d+\s*$/,  // Page numbers like "1/2"
+      
+      // Common form boilerplate
+      /for\s+office\s+use\s+only/i,
+      /do\s+not\s+write\s+(below|above)\s+this\s+line/i,
+      /^\s*instructions:\s*/i,
+      /^\s*please\s+(print|type)\s+(clearly|legibly)/i,
+      
+      // Legal disclaimers and privacy notices
+      /privacy\s+(policy|notice|statement)/i,
+      /terms\s+(and|&)\s+conditions/i,
+      /^\s*disclaimer:\s*/i,
+      /confidential\s+and\s+proprietary/i,
+      
+      // Watermarks and stamps
+      /^\s*(copy|duplicate|original|certified)\s*$/i,
+      /^\s*watermark\s*$/i,
+      /^\s*void\s+if\s+altered\s*$/i,
+      
+      // Form field labels without data
+      /^\s*_+\s*$/,  // Lines with only underscores
+      /^\s*\[\s*\]\s*$/,  // Empty checkboxes
+      /^\s*signature:\s*_*\s*$/i,
+      /^\s*date:\s*_*\s*$/i,
+      
+      // Barcode and reference data
+      /^\s*barcode[:;]?\s*[\d\*]+\s*$/i,
+      /^\s*\*[\d\*]+\*\s*$/,  // Barcode format
+      /^\s*control\s+(number|#)[:;]?\s*[\w\d]+\s*$/i,
+      
+      // Very short lines (likely fragments)
+      /^\s*.{1,2}\s*$/  // Lines with 1-2 characters only
+    ];
+    
+    // Common noise phrases to remove entirely
+    const noisePhrases = [
+      'For office use only',
+      'Do not write below this line',
+      'Please print clearly',
+      'Form approved',
+      'OMB No.',
+      'Paperwork Reduction Act',
+      'Public reporting burden',
+      'Privacy Act Statement',
+      'Federal Register'
+    ];
+    
+    for (const line of lines) {
+      // Skip if line matches noise patterns
+      const isNoise = noisePatterns.some(pattern => pattern.test(line));
+      
+      if (!isNoise) {
+        // Remove noise phrases from the line
+        let cleanLine = line;
+        for (const phrase of noisePhrases) {
+          cleanLine = cleanLine.replace(new RegExp(phrase, 'gi'), '');
+        }
+        
+        // Keep the line if it has meaningful content after cleanup
+        cleanLine = cleanLine.trim();
+        if (cleanLine.length > 3) {  // Minimum meaningful content
+          filteredLines.push(cleanLine);
+        }
+      }
+    }
+    
+    return filteredLines.join('\n');
+  }
+
+  /**
+   * Correct common OCR errors
+   */
+  private correctOCRErrors(text: string): string {
+    let correctedText = text;
+    
+    // Character substitution patterns (most common OCR errors)
+    const ocrCorrections = [
+      // Number/letter confusion
+      { pattern: /(?<!\d)0(?=\d{2,})/g, replacement: 'O' },  // 0 → O in letter contexts
+      { pattern: /(?<=\d)O(?=\d)/g, replacement: '0' },      // O → 0 in number contexts
+      { pattern: /(?<!\w)1(?=\w{2,})/g, replacement: 'I' },  // 1 → I in letter contexts
+      { pattern: /(?<=\w)I(?=\d)/g, replacement: '1' },      // I → 1 in number contexts
+      { pattern: /(?<!\w)l(?=\w{2,})/g, replacement: 'I' },  // l → I in letter contexts
+      
+      // Common character misreads
+      { pattern: /5(?=[A-Z]{2,})/g, replacement: 'S' },     // 5 → S in letter contexts
+      { pattern: /8(?=[A-Z]{2,})/g, replacement: 'B' },     // 8 → B in letter contexts
+      { pattern: /6(?=[A-Z]{2,})/g, replacement: 'G' },     // 6 → G in letter contexts
+      
+      // Letter combination fixes
+      { pattern: /\brn\b/g, replacement: 'm' },            // rn → m
+      { pattern: /\bvv\b/g, replacement: 'w' },            // vv → w
+      { pattern: /\bcl\b/g, replacement: 'd' },            // cl → d
+      { pattern: /\bii\b/g, replacement: 'll' },           // ii → ll
+      
+      // Fix spaced-out VINs (common OCR issue)
+      { pattern: /\b([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\b/g, 
+        replacement: '$1$2$3$4$5$6$7$8$9$10$11$12$13$14$15$16$17' },
+      
+      // Fix spaced license plates
+      { pattern: /\b([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])\b/g, 
+        replacement: '$1$2$3$4$5$6' },
+      
+      // Date format corrections
+      { pattern: /(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{2,4})/g, replacement: '$1/$2/$3' },
+      { pattern: /(\d{1,2})\s*-\s*(\d{1,2})\s*-\s*(\d{2,4})/g, replacement: '$1-$2-$3' },
+      { pattern: /(\d{1,2})\s*\.\s*(\d{1,2})\s*\.\s*(\d{2,4})/g, replacement: '$1/$2/$3' },
+      
+      // Policy number spacing fixes
+      { pattern: /policy\s*#?:?\s*([A-Z0-9])\s+([A-Z0-9])\s+([A-Z0-9])/gi, 
+        replacement: 'Policy: $1$2$3' },
+      
+      // VIN label fixes
+      { pattern: /VlN\s*[:;]?/gi, replacement: 'VIN:' },     // VlN → VIN
+      { pattern: /V1N\s*[:;]?/gi, replacement: 'VIN:' },     // V1N → VIN
+      
+      // State code fixes
+      { pattern: /\bCA\s+L\b/g, replacement: 'CAL' },       // CA L → CAL (California)
+      { pattern: /\bN\s+Y\b/g, replacement: 'NY' },         // N Y → NY
+      { pattern: /\bF\s+L\b/g, replacement: 'FL' },         // F L → FL
+      
+      // Vehicle make corrections
+      { pattern: /FREIGHTL1NER/gi, replacement: 'FREIGHTLINER' },
+      { pattern: /PETERBILT/gi, replacement: 'PETERBILT' },
+      { pattern: /KENW0RTH/gi, replacement: 'KENWORTH' },
+      { pattern: /V0LV0/gi, replacement: 'VOLVO' },
+      { pattern: /INTERNATI0NAL/gi, replacement: 'INTERNATIONAL' },
+    ];
+    
+    // Apply all corrections
+    for (const correction of ocrCorrections) {
+      correctedText = correctedText.replace(correction.pattern, correction.replacement);
+    }
+    
+    return correctedText;
+  }
+
+  /**
+   * Normalize whitespace and formatting
+   */
+  private normalizeWhitespace(text: string): string {
+    return text
+      // Convert multiple spaces to single space
+      .replace(/\s+/g, ' ')
+      // Remove leading/trailing whitespace from each line
+      .split('\n')
+      .map(line => line.trim())
+      // Remove empty lines
+      .filter(line => line.length > 0)
+      // Rejoin with single newlines
+      .join('\n')
+      .trim();
   }
 
   /**
