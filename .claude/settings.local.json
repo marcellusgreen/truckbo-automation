@@ -31,7 +31,8 @@
       "Bash(aws s3 mb:*)",
       "Bash(taskkill:*)",
       "Bash(vercel:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(npx vercel:*)"
     ],
     "deny": []
   }
