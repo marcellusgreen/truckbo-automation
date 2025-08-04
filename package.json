@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "vite",
     "prebuild": "chmod +x ./node_modules/.bin/vite || true",
-    "build": "vite build",
+    "build": "vite build && ls -la && ls -la dist/",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "db:setup": "node scripts/setup-database.js",
