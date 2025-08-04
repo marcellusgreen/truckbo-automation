@@ -32,7 +32,8 @@
       "Bash(taskkill:*)",
       "Bash(vercel:*)",
       "Bash(git add:*)",
-      "Bash(npx vercel:*)"
+      "Bash(npx vercel:*)",
+      "Bash(git cherry-pick:*)"
     ],
     "deny": []
   }
