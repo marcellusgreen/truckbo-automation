@@ -3,10 +3,15 @@
 
 import { truckNumberParser } from './truckNumberParser';
 import { createWorker, Worker } from 'tesseract.js';
-import { errorHandler } from './errorHandler';
+import { errorHandler, withErrorHandling } from './errorHandler';
+import { logger, logOperation } from './logger';
 import { processingTracker } from '../components/ProcessingModal';
 import { dataValidator } from './dataValidation';
 import { claudeVisionProcessor, type ClaudeProcessingResult } from './claudeVisionProcessor';
+import { documentRouter } from './documentRouter';
+import { vehicleReconciliation, type ExtractedDocument, type ConsolidatedVehicle } from './vehicleReconciliation';
+import { standardizeVehicleData, standardizeDriverData, type StandardizedVehicle, type StandardizedDriver, type DataSource } from '../utils/fieldStandardization';
+import { FIELD_NAMING_STANDARDS } from '../types/standardizedFields';
 
 export interface DocumentInfo {
   file: File;
@@ -27,14 +32,14 @@ export interface ExtractedDriverData {
   cdlState?: string;
   cdlClass?: 'A' | 'B' | 'C';
   cdlIssueDate?: string;
-  cdlExpirationDate?: string;
+  cdlExpirationDate?: string; // Already standardized
   cdlEndorsements?: string[];
   cdlRestrictions?: string[];
   
   // Medical Certificate Information
   medicalCertNumber?: string;
   medicalIssueDate?: string;
-  medicalExpirationDate?: string;
+  medicalExpirationDate?: string; // Already standardized
   examinerName?: string;
   examinerNationalRegistry?: string;
   medicalRestrictions?: string[];
@@ -61,13 +66,13 @@ export interface ExtractedVehicleData extends Record<string, unknown> {
   // Registration data
   registrationNumber?: string;
   registrationState?: string;
-  registrationExpiry?: string;
+  registrationExpirationDate?: string; // Standardized naming
   registeredOwner?: string;
   
   // Insurance data
   insuranceCarrier?: string;
   policyNumber?: string;
-  insuranceExpiry?: string;
+  insuranceExpirationDate?: string; // Standardized naming
   coverageAmount?: number;
   
   // Metadata
@@ -81,6 +86,7 @@ export interface ExtractedVehicleData extends Record<string, unknown> {
 export interface ProcessingResult {
   vehicleData: ExtractedVehicleData[];
   driverData: ExtractedDriverData[];
+  consolidatedVehicles?: any[]; // Add support for reconciled vehicles
   unprocessedFiles: string[];
   errors: { fileName: string; error: string }[];
   summary: {
@@ -101,12 +107,73 @@ export class DocumentProcessor {
    * Process a folder of documents uploaded by the user
    */
   async processBulkDocuments(files: FileList): Promise<ProcessingResult> {
-    console.log(`📁 Starting bulk document processing: ${files.length} files`);
+    const context = {
+      layer: 'processor' as const,
+      component: 'DocumentProcessor',
+      operation: 'processBulkDocuments',
+      metadata: { fileCount: files.length }
+    };
+
+    // Start operation logging
+    const operationId = logger.startOperation('Bulk Document Processing', context, {
+      fileCount: files.length,
+      fileTypes: Array.from(files).map(f => f.type).filter(Boolean)
+    });
+
+    try {
+      return await logOperation.wrap(
+        'processBulkDocuments',
+        context,
+        async () => {
+          logger.info(`Starting bulk document processing: ${files.length} files`, context);
+          
+          return await this.processBulkDocumentsInternal(files, operationId, context);
+        },
+        { fileCount: files.length }
+      );
+    } catch (error) {
+      logger.failOperation('Bulk Document Processing', operationId, error as Error, context);
+      
+      // Handle critical processing error
+      errorHandler.handleCriticalError(error, 'Bulk Document Processing');
+      
+      // Return error result instead of throwing
+      return {
+        vehicleData: [],
+        driverData: [],
+        unprocessedFiles: Array.from(files).map(f => f.name),
+        errors: [{ fileName: 'System Error', error: (error as Error).message }],
+        summary: {
+          totalFiles: files.length,
+          processed: 0,
+          registrationDocs: 0,
+          insuranceDocs: 0,
+          medicalCertificates: 0,
+          cdlDocuments: 0,
+          duplicatesFound: 0
+        }
+      };
+    }
+  }
+
+  /**
+   * Internal processing method with comprehensive error handling
+   */
+  private async processBulkDocumentsInternal(
+    files: FileList, 
+    operationId: string, 
+    context: any
+  ): Promise<ProcessingResult> {
+    logger.info(`Starting internal bulk document processing: ${files.length} files`, context);
+
+    // Clear previous processing steps with error handling
+    try {
+      processingTracker.clear();
+    } catch (error) {
+      logger.warn('Failed to clear processing tracker', context, error as Error);
+    }
     
-    // Clear previous processing steps
-    processingTracker.clear();
-    
-    // Add processing steps
+    // Add processing steps with error handling
     processingTracker.addStep({
       id: 'classify',
       name: 'Classifying Documents',
@@ -142,60 +209,180 @@ export class DocumentProcessor {
     };
     
     try {
-      // Step 1: Filter and classify documents
+      // Step 1: Filter and classify documents with error handling
       processingTracker.startStep('classify', `Analyzing ${files.length} files...`);
-      const documents = await this.classifyDocuments(files);
-      processingTracker.completeStep('classify', `Classified ${documents.length} supported documents`);
       
-      // Step 2: Process each document with AI/OCR
-      processingTracker.startStep('extract', `Processing ${documents.length} documents...`);
+      const documents = await errorHandler.enhanced.handleOperationWithRetry(
+        () => this.classifyDocuments(files),
+        () => {
+          logger.warn('Using fallback document classification', context);
+          // Fallback: treat all files as unknown type
+          return Array.from(files).map(file => ({
+            file,
+            fileName: file.name,
+            type: 'unknown' as const,
+            confidence: 0.1
+          }));
+        },
+        context,
+        {
+          enableRetry: true,
+          maxRetries: 2,
+          enableFallback: true,
+          showUserNotification: false
+        }
+      );
       
-      for (let i = 0; i < documents.length; i++) {
-        const doc = documents[i];
-        const progress = ((i / documents.length) * 100);
-        processingTracker.updateProgress('extract', progress, `Processing ${doc.fileName}...`);
+      if (!documents.success) {
+        logger.error('Document classification failed completely', context, documents.error);
+        throw documents.error;
+      }
+      
+      const classifiedDocs = documents.data!;
+      processingTracker.completeStep('classify', `Classified ${classifiedDocs.length} supported documents`);
+      logger.info(`Successfully classified ${classifiedDocs.length} documents`, context, {
+        supportedCount: classifiedDocs.length,
+        fallbackUsed: documents.fallbackUsed
+      });
+      
+      // Step 2: Process each document with AI/OCR with comprehensive error handling
+      processingTracker.startStep('extract', `Processing ${classifiedDocs.length} documents...`);
+      logger.info(`Starting document extraction for ${classifiedDocs.length} documents`, context);
+      
+      for (let i = 0; i < classifiedDocs.length; i++) {
+        const doc = classifiedDocs[i];
+        const progress = ((i / classifiedDocs.length) * 100);
         
+        // Update progress with error handling
         try {
-          console.log(`🔍 Processing: ${doc.fileName} (${doc.type})`);
-          
-          if (doc.type === 'medical_certificate' || doc.type === 'cdl') {
-            // Process driver documents
-            const extractedDriverData = await this.extractDriverDataFromDocument(doc);
-            
-            if (extractedDriverData) {
-              result.driverData.push(extractedDriverData);
-              result.summary.processed++;
+          processingTracker.updateProgress('extract', progress, `Processing ${doc.fileName}...`);
+        } catch (trackingError) {
+          logger.warn('Failed to update processing progress', context, trackingError as Error, { fileName: doc.fileName });
+        }
+        
+        const docContext = {
+          ...context,
+          operation: 'process_single_document',
+          metadata: { 
+            fileName: doc.fileName, 
+            documentType: doc.type, 
+            fileIndex: i + 1,
+            totalFiles: classifiedDocs.length
+          }
+        };
+        
+        logger.debug(`Processing document: ${doc.fileName} (${doc.type})`, docContext);
+        
+        // Process single document with comprehensive error handling
+        const docResult = await errorHandler.enhanced.handleOperationWithRetry(
+          async () => {
+            if (doc.type === 'medical_certificate' || doc.type === 'cdl') {
+              // Process driver documents
+              logger.debug('Processing as driver document', docContext);
+              const extractedDriverData = await this.extractDriverDataFromDocument(doc);
               
-              if (extractedDriverData.documentType === 'medical_certificate') {
-                result.summary.medicalCertificates++;
+              if (extractedDriverData) {
+                logger.info('Successfully extracted driver data', docContext, {
+                  documentType: extractedDriverData.documentType,
+                  confidence: extractedDriverData.extractionConfidence
+                });
+                
+                return {
+                  type: 'driver' as const,
+                  data: extractedDriverData,
+                  documentType: extractedDriverData.documentType
+                };
               } else {
-                result.summary.cdlDocuments++;
+                logger.warn('No driver data extracted from document', docContext);
+                return null;
               }
             } else {
-              result.unprocessedFiles.push(doc.fileName);
+              // Process vehicle documents
+              logger.debug('Processing as vehicle document', docContext);
+              const extractedData = await this.extractDataFromDocument(doc);
+              
+              if (extractedData) {
+                logger.info('Successfully extracted vehicle data', docContext, {
+                  documentType: extractedData.documentType,
+                  confidence: extractedData.extractionConfidence,
+                  hasVin: !!extractedData.vin
+                });
+                
+                return {
+                  type: 'vehicle' as const,
+                  data: extractedData,
+                  documentType: extractedData.documentType
+                };
+              } else {
+                logger.warn('No vehicle data extracted from document', docContext);
+                return null;
+              }
+            }
+          },
+          null, // No fallback for individual documents
+          docContext,
+          {
+            enableRetry: true,
+            maxRetries: 2,
+            retryDelay: 1000,
+            enableFallback: false,
+            showUserNotification: false
+          }
+        );
+        
+        // Handle processing result
+        if (docResult.success && docResult.data) {
+          const extractionResult = docResult.data;
+          
+          if (extractionResult.type === 'driver') {
+            result.driverData.push(extractionResult.data);
+            result.summary.processed++;
+            
+            if (extractionResult.documentType === 'medical_certificate') {
+              result.summary.medicalCertificates++;
+            } else {
+              result.summary.cdlDocuments++;
             }
           } else {
-            // Process vehicle documents (existing logic)
-            const extractedData = await this.extractDataFromDocument(doc);
+            result.vehicleData.push(extractionResult.data);
+            result.summary.processed++;
             
-            if (extractedData) {
-              result.vehicleData.push(extractedData);
-              result.summary.processed++;
-              
-              if (extractedData.documentType === 'registration') {
-                result.summary.registrationDocs++;
-              } else {
-                result.summary.insuranceDocs++;
-              }
+            if (extractionResult.documentType === 'registration') {
+              result.summary.registrationDocs++;
             } else {
-              result.unprocessedFiles.push(doc.fileName);
+              result.summary.insuranceDocs++;
             }
           }
           
-        } catch (error) {
+          logger.info(`Successfully processed document ${i + 1}/${classifiedDocs.length}`, docContext);
+        } else {
+          // Document processing failed
+          const errorMessage = docResult.error?.message || 'Unknown processing error';
+          logger.error(`Failed to process document ${i + 1}/${classifiedDocs.length}`, docContext, docResult.error);
+          
+          result.unprocessedFiles.push(doc.fileName);
           result.errors.push({
             fileName: doc.fileName,
-            error: error instanceof Error ? error.message : String(error)
+            error: errorMessage
+          });
+          
+          // Use legacy error handler for user notification
+          errorHandler.handleOCRError(
+            docResult.error || new Error(errorMessage),
+            doc.fileName,
+            () => {
+              logger.info('User requested retry for failed document', docContext);
+              // Retry logic would go here
+            }
+          );
+        }
+        
+        // Log progress periodically
+        if ((i + 1) % 5 === 0 || i === classifiedDocs.length - 1) {
+          logger.info(`Document processing progress: ${i + 1}/${classifiedDocs.length}`, context, {
+            processed: result.summary.processed,
+            errors: result.errors.length,
+            unprocessed: result.unprocessedFiles.length
           });
         }
       }
@@ -204,8 +391,8 @@ export class DocumentProcessor {
       
       // Step 3: Merge data for same vehicles
       processingTracker.startStep('merge', 'Merging related vehicle documents...');
-      result.vehicleData = this.mergeVehicleData(result.vehicleData);
-      processingTracker.completeStep('merge', `Merged data for ${result.vehicleData.length} vehicles`);
+      result.vehicleData = this.mergeVehicleData(result.vehicleData || []);
+      processingTracker.completeStep('merge', `Merged data for ${result.vehicleData?.length || 0} vehicles`);
       
       console.log(`✅ Bulk processing complete: ${result.summary.processed}/${result.summary.totalFiles} files processed`);
       
@@ -217,6 +404,10 @@ export class DocumentProcessor {
       errorHandler.handleCriticalError(error, 'Bulk document processing');
       processingTracker.failStep('extract', error instanceof Error ? error.message : String(error));
     }
+    
+    // Standardize field names before returning
+    result.vehicleData = result.vehicleData.map(vehicle => this.standardizeExtractedVehicleData(vehicle));
+    result.driverData = result.driverData.map(driver => this.standardizeExtractedDriverData(driver));
     
     return result;
   }
@@ -859,10 +1050,10 @@ Fleet Vehicle: ${truckNum}
     console.log(`📅 Date extraction for ${fileName} (${docType}): found ${dates.length} dates:`, dates);
     if (dates.length > 0) {
       if (docType === 'registration') {
-        data.registrationExpiry = dates[0];
+        data.registrationExpirationDate = dates[0];
         console.log(`📋 Assigned registration expiry: ${dates[0]} to ${fileName}`);
       } else if (docType === 'insurance') {
-        data.insuranceExpiry = dates[0];
+        data.insuranceExpirationDate = dates[0];
         console.log(`🛡️ Assigned insurance expiry: ${dates[0]} to ${fileName}`);
       }
       data.extractionConfidence += 0.2;
@@ -1503,7 +1694,7 @@ Fleet Vehicle: ${truckNum}
     console.log(`🛡️ Insurance extraction complete for ${data.sourceFileName}:`, {
       carrier: data.insuranceCarrier,
       policy: data.policyNumber,
-      expiry: data.insuranceExpiry,
+      expiry: data.insuranceExpirationDate,
       coverage: data.coverageAmount
     });
   }
@@ -1599,7 +1790,7 @@ Fleet Vehicle: ${truckNum}
       filePatterns: Object.keys(filePatterns).length,
       vinCounts,
       plateCounts,
-      filePatterns
+      filePatternsData: filePatterns
     });
     
     mergeLog.push(`Analysis found: ${Object.keys(vinCounts).length} unique VINs, ${Object.keys(plateCounts).length} unique plates`);
@@ -1641,13 +1832,13 @@ Fleet Vehicle: ${truckNum}
           // Registration data - combine from registration documents
           registrationNumber: this.selectBestValue(existing.registrationNumber, data.registrationNumber, (v) => v && v.length > 0),
           registrationState: this.selectBestValue(existing.registrationState, data.registrationState, (v) => v && v.length === 2),
-          registrationExpiry: this.selectBestValue(existing.registrationExpiry, data.registrationExpiry, (v) => v && this.isValidDate(v)),
+          registrationExpirationDate: this.selectBestValue(existing.registrationExpirationDate, data.registrationExpirationDate, (v) => v && this.isValidDate(v)),
           registeredOwner: this.selectBestValue(existing.registeredOwner, data.registeredOwner, (v) => v && v.length > 0),
           
           // Insurance data - combine from insurance documents  
           insuranceCarrier: this.selectBestValue(existing.insuranceCarrier, data.insuranceCarrier, (v) => v && v.length > 0),
           policyNumber: this.selectBestValue(existing.policyNumber, data.policyNumber, (v) => v && v.length > 0),
-          insuranceExpiry: this.selectBestValue(existing.insuranceExpiry, data.insuranceExpiry, (v) => v && this.isValidDate(v)),
+          insuranceExpirationDate: this.selectBestValue(existing.insuranceExpirationDate, data.insuranceExpirationDate, (v) => v && this.isValidDate(v)),
           coverageAmount: this.selectBestValue(existing.coverageAmount, data.coverageAmount, (v) => v && v > 0),
           
           // Document metadata - combine
@@ -2042,7 +2233,7 @@ Fleet Vehicle: ${truckNum}
     if (recordType === 'vehicle') {
       const vehicleRecord = record as ExtractedVehicleData;
       // Prefer registration expiry, then insurance expiry
-      dateString = vehicleRecord.registrationExpiry || vehicleRecord.insuranceExpiry;
+      dateString = vehicleRecord.registrationExpirationDate || vehicleRecord.insuranceExpirationDate;
     } else {
       const driverRecord = record as ExtractedDriverData;
       // Prefer CDL expiry, then medical expiry
@@ -2121,22 +2312,129 @@ Fleet Vehicle: ${truckNum}
   ): Promise<{
     vehicleData: ExtractedVehicleData[];
     driverData: ExtractedDriverData[]; 
+    consolidatedVehicles: ConsolidatedVehicle[]; // NEW: Reconciled vehicle data
     processingStats: any;
     claudeResults: ClaudeProcessingResult[];
   }> {
     const startTime = Date.now();
+    
+    // CRITICAL DEBUG: Log everything at entry point
+    console.log('🔍 PROCESSWITCHLAUDE ENTRY DEBUG:');
+    console.log('files parameter:', files);
+    console.log('files type:', typeof files);
+    console.log('files instanceof FileList:', files instanceof FileList);
+    console.log('files length property exists:', files && 'length' in files);
+    console.log('files.length value (safe):', files?.length);
+    
+    if (!files) {
+      throw new Error('Files parameter is null or undefined at processDocumentsWithClaude entry');
+    }
+    
+    if (typeof files.length === 'undefined') {
+      throw new Error('Files parameter has no length property at processDocumentsWithClaude entry');
+    }
+    
     const totalFiles = files.length;
     
     try {
       onProgress?.(10, 'Initializing Claude Vision processor...');
       
       // Convert FileList to File array
+      console.log('🔍 ARRAY CONVERSION DEBUG:');
+      console.log('About to call Array.from(files) where files is:', typeof files);
       const fileArray = Array.from(files);
+      console.log('fileArray created successfully:', fileArray);
+      console.log('fileArray length:', fileArray.length);
+      console.log('fileArray type:', Array.isArray(fileArray));
       
-      onProgress?.(20, `Processing ${totalFiles} documents with Claude Vision...`);
+      onProgress?.(20, `Processing ${totalFiles} documents with systematic routing...`);
       
-      // Process documents with Claude Vision API
-      const claudeResults = await claudeVisionProcessor.processDocuments(fileArray);
+      // Process documents with systematic routing (PDF.js, Vision AI, etc.)
+      console.log('🔍 ROUTING DEBUG: About to call documentRouter.processFiles');
+      const routingResults = await documentRouter.processFiles(fileArray, (completed, total, current) => {
+        const progress = 20 + (completed / total) * 50; // 20-70% for processing
+        onProgress?.(progress, `Processing ${current} (${completed}/${total})`);
+      });
+      
+      console.log('🔍 ROUTING RESULTS DEBUG:');
+      console.log('routingResults:', routingResults);
+      console.log('routingResults type:', typeof routingResults);
+      console.log('routingResults is array:', Array.isArray(routingResults));
+      console.log('routingResults length:', routingResults?.length);
+      
+      if (!routingResults) {
+        throw new Error('documentRouter.processFiles returned null/undefined');
+      }
+      
+      if (!Array.isArray(routingResults)) {
+        throw new Error('documentRouter.processFiles did not return an array');
+      }
+      
+      // Convert routing results to Claude results format for compatibility
+      console.log('🔍 About to map routingResults');
+      const claudeResults: ClaudeProcessingResult[] = routingResults.map(r => {
+        if (r.result) {
+          // Ensure data is defined to prevent undefined access
+          if (r.result.success && !r.result.data) {
+            r.result.data = {
+              documentType: 'unknown',
+              confidence: 0,
+              extractedData: {},
+              dataQuality: {
+                isComplete: false,
+                missingCriticalFields: ['No data extracted'],
+                qualityScore: 0
+              },
+              conflicts: {
+                hasConflicts: false,
+                conflictDetails: []
+              },
+              validationResults: {
+                vinValid: false,
+                datesRealistic: true,
+                documentsExpired: false,
+                requiresImmediateAction: false
+              },
+              rawText: '',
+              processingNotes: ['No data extracted from document'],
+              requiresReview: true,
+              autoApprovalRecommended: false
+            };
+          }
+          return r.result;
+        }
+        
+        // Fallback result with complete structure
+        return {
+          success: r.success,
+          error: r.error,
+          processingTime: r.processingTime || 0,
+          data: r.success ? {
+            documentType: 'unknown',
+            confidence: 0,
+            extractedData: {},
+            dataQuality: {
+              isComplete: false,
+              missingCriticalFields: ['Processing failed'],
+              qualityScore: 0
+            },
+            conflicts: {
+              hasConflicts: false,
+              conflictDetails: []
+            },
+            validationResults: {
+              vinValid: false,
+              datesRealistic: true,
+              documentsExpired: false,
+              requiresImmediateAction: false
+            },
+            rawText: '',
+            processingNotes: ['Processing failed'],
+            requiresReview: true,
+            autoApprovalRecommended: false
+          } : undefined
+        };
+      });
       
       onProgress?.(70, 'Converting Claude results to TruckBo format...');
       
@@ -2145,11 +2443,21 @@ Fleet Vehicle: ${truckNum}
       const driverData: ExtractedDriverData[] = [];
       
       claudeResults.forEach((result, index) => {
-        if (result.success && result.data) {
+        const fileName = fileArray[index]?.name || `File ${index + 1}`;
+        
+        // Debug logging
+        console.log(`🔍 Processing result for ${fileName}:`, {
+          success: result.success,
+          hasData: !!result.data,
+          hasExtractedData: !!(result.data?.extractedData),
+          documentType: result.data?.documentType,
+          error: result.error
+        });
+
+        if (result.success && result.data && result.data.extractedData) {
           const claudeData = result.data;
-          const fileName = fileArray[index].name;
           
-          console.log(`🔍 Processing Claude result for ${fileName}:`, {
+          console.log(`✅ Processing valid Claude result for ${fileName}:`, {
             documentType: claudeData.documentType,
             vin: claudeData.extractedData.vin,
             licensePlate: claudeData.extractedData.licensePlate,
@@ -2169,12 +2477,12 @@ Fleet Vehicle: ${truckNum}
               // Registration info
               registrationNumber: claudeData.extractedData.registrationNumber || '',
               registrationState: claudeData.extractedData.state || '',
-              registrationExpiry: claudeData.extractedData.expirationDate || '',
+              registrationExpirationDate: claudeData.extractedData.expirationDate || '',
               
               // Insurance info
               policyNumber: claudeData.extractedData.policyNumber || '',
               insuranceCarrier: claudeData.extractedData.insuranceCompany || '',
-              insuranceExpiry: claudeData.extractedData.expirationDate || '',
+              insuranceExpirationDate: claudeData.extractedData.expirationDate || '',
               coverageAmount: parseFloat(claudeData.extractedData.coverageAmount || '0') || 0,
               
               // Document metadata
@@ -2227,18 +2535,34 @@ Fleet Vehicle: ${truckNum}
       onProgress?.(90, 'Finalizing results...');
       
       // Generate processing statistics
+      console.log('🔍 STATS GENERATION DEBUG:');
+      console.log('claudeResults for stats:', claudeResults);
+      console.log('claudeResults length for stats:', claudeResults?.length);
+      console.log('claudeResults is array for stats:', Array.isArray(claudeResults));
+      
+      // Ensure claudeResults is valid before generating stats
+      const safeClaudeResults = Array.isArray(claudeResults) ? claudeResults : [];
+      const successfulResults = safeClaudeResults.filter(r => r && r.success);
+      const failedResults = safeClaudeResults.filter(r => r && !r.success);
+      const successfulWithData = safeClaudeResults.filter(r => r && r.success && r.data);
+      
+      console.log('🔍 SAFE ARRAYS DEBUG:');
+      console.log('safeClaudeResults length:', safeClaudeResults.length);
+      console.log('successfulResults length:', successfulResults.length);
+      console.log('failedResults length:', failedResults.length);
+      
       const processingStats = {
         totalFiles,
-        processedFiles: claudeResults.filter(r => r.success).length,
-        failedFiles: claudeResults.filter(r => !r.success).length,
-        vehiclesFound: vehicleData.length,
-        driversFound: driverData.length,
+        processedFiles: successfulResults.length,
+        failedFiles: failedResults.length,
+        vehiclesFound: vehicleData?.length || 0,
+        driversFound: driverData?.length || 0,
         processingTime: Date.now() - startTime,
-        claudeStats: claudeVisionProcessor.getProcessingStats(claudeResults),
-        averageConfidence: claudeResults
-          .filter(r => r.success && r.data)
-          .reduce((sum, r) => sum + (r.data?.confidence || 0), 0) / claudeResults.filter(r => r.success).length,
-        documentsRequiringReview: claudeResults.filter(r => r.success && r.data?.requiresReview).length
+        claudeStats: claudeVisionProcessor.getProcessingStats(safeClaudeResults),
+        averageConfidence: successfulWithData.length > 0 
+          ? successfulWithData.reduce((sum, r) => sum + (r.data?.confidence || 0), 0) / successfulWithData.length
+          : 0,
+        documentsRequiringReview: safeClaudeResults.filter(r => r && r.success && r.data?.requiresReview).length
       };
       
       onProgress?.(85, 'Merging related documents...');
@@ -2266,11 +2590,62 @@ Fleet Vehicle: ${truckNum}
         drivers: mergedDriverData.length - finalDriverData.length
       };
       
-      onProgress?.(100, `Processing complete! Found ${finalVehicleData.length} vehicles and ${finalDriverData.length} drivers`);
+      onProgress?.(95, 'Reconciling vehicle documents...');
+      
+      // Convert claude results to reconciliation format
+      const documentsForReconciliation: ExtractedDocument[] = claudeResults.map((result, index) => ({
+        fileName: fileArray[index]?.name || `document_${index}`,
+        documentType: result.success ? result.data?.documentType || 'unknown' : 'unknown',
+        extractedData: result.success ? result.data?.extractedData || {} : {},
+        vin_numbers: result.success ? result.data?.vin_numbers || [] : [],
+        processingTime: result.processingTime || 0,
+        qualityMetrics: result.success ? result.data?.qualityMetrics : undefined,
+        timestamp: new Date().toISOString()
+      }));
+      
+      // Perform vehicle reconciliation
+      const consolidatedVehicles = vehicleReconciliation.reconcileDocuments(documentsForReconciliation);
+      
+      // **CRITICAL FIX: Save consolidated vehicles to vehicleReconciler for persistence**
+      console.log('🔄 Saving consolidated vehicles to vehicleReconciler...');
+      const { vehicleReconciler } = await import('./vehicleReconciler');
+      
+      for (const [index, consolidatedVehicle] of consolidatedVehicles.entries()) {
+        try {
+          // Convert consolidated vehicle back to document format for reconciler
+          const documentMetadata = {
+            fileName: consolidatedVehicle.primaryDocument?.fileName || `consolidated_vehicle_${index}`,
+            source: 'document_processor_consolidation',
+            uploadDate: new Date().toISOString()
+          };
+          
+          // Add the consolidated vehicle data to persistent reconciler
+          const reconcilerResult = await vehicleReconciler.addDocument(consolidatedVehicle, documentMetadata);
+          
+          if (reconcilerResult.success) {
+            console.log(`✅ Saved consolidated vehicle ${consolidatedVehicle.primaryVIN || 'unknown'} to reconciler`);
+          } else {
+            console.warn(`⚠️ Failed to save consolidated vehicle: ${reconcilerResult.warnings?.join(', ')}`);
+          }
+        } catch (error) {
+          console.error(`❌ Error saving consolidated vehicle ${index}:`, error);
+        }
+      }
+      
+      // Update processing stats with reconciliation info
+      processingStats.reconciliation = {
+        totalDocuments: documentsForReconciliation.length,
+        consolidatedVehicles: consolidatedVehicles.length,
+        documentsPerVehicle: documentsForReconciliation.length / (consolidatedVehicles.length || 1),
+        reconciliationTime: Date.now() - startTime
+      };
+      
+      onProgress?.(100, `Processing complete! Reconciled ${documentsForReconciliation.length} documents into ${consolidatedVehicles.length} vehicles`);
       
       return {
         vehicleData: finalVehicleData,
         driverData: finalDriverData,
+        consolidatedVehicles: consolidatedVehicles, // NEW: Reconciled vehicle data
         processingStats,
         claudeResults
       };
@@ -2300,10 +2675,11 @@ Fleet Vehicle: ${truckNum}
       });
       
       // If Claude found good results, return them
-      if (claudeResult.vehicleData.length > 0 || claudeResult.driverData.length > 0) {
+      if ((claudeResult.vehicleData?.length || 0) > 0 || (claudeResult.driverData?.length || 0) > 0) {
         return {
-          vehicleData: claudeResult.vehicleData,
-          driverData: claudeResult.driverData,
+          vehicleData: claudeResult.vehicleData || [],
+          driverData: claudeResult.driverData || [],
+          consolidatedVehicles: claudeResult.consolidatedVehicles || [], // NEW: Include reconciled data
           processingStats: claudeResult.processingStats
         };
       }
@@ -2398,6 +2774,40 @@ Fleet Vehicle: ${truckNum}
     const normalized = plate.replace(/[^A-Z0-9]/g, '').toUpperCase();
     console.log(`🚗 License plate normalized: "${plate}" -> "${normalized}"`);
     return normalized;
+  }
+
+  /**
+   * Standardize extracted vehicle data to use consistent field names
+   */
+  private standardizeExtractedVehicleData(vehicleData: ExtractedVehicleData): ExtractedVehicleData {
+    const standardized = standardizeVehicleData(vehicleData, 'document_processing');
+    
+    // Ensure required fields for ExtractedVehicleData interface
+    return {
+      ...standardized,
+      documentType: vehicleData.documentType,
+      extractionConfidence: vehicleData.extractionConfidence,
+      sourceFileName: vehicleData.sourceFileName,
+      processingNotes: vehicleData.processingNotes || [],
+      needsReview: vehicleData.needsReview || false
+    } as ExtractedVehicleData;
+  }
+
+  /**
+   * Standardize extracted driver data to use consistent field names
+   */
+  private standardizeExtractedDriverData(driverData: ExtractedDriverData): ExtractedDriverData {
+    const standardized = standardizeDriverData(driverData, 'document_processing');
+    
+    // Ensure required fields for ExtractedDriverData interface
+    return {
+      ...standardized,
+      documentType: driverData.documentType,
+      extractionConfidence: driverData.extractionConfidence,
+      sourceFileName: driverData.sourceFileName,
+      processingNotes: driverData.processingNotes || [],
+      needsReview: driverData.needsReview || false
+    } as ExtractedDriverData;
   }
 }
 
