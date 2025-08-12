@@ -4,7 +4,12 @@
 import { truckNumberParser } from './truckNumberParser';
 import { createWorker, Worker } from 'tesseract.js';
 import { errorHandler, withErrorHandling } from './errorHandler';
-import { logger, logOperation } from './logger';
+// import { logger, logOperation } from './logger'; // Temporarily disabled for build
+const logger = console;
+const logOperation = {
+  start: (operation: string) => ({ operation, startTime: Date.now() }),
+  end: (context: any) => console.log(`Operation ${context.operation} completed in ${Date.now() - context.startTime}ms`)
+};
 import { processingTracker } from '../components/ProcessingModal';
 import { dataValidator } from './dataValidation';
 import { claudeVisionProcessor, type ClaudeProcessingResult } from './claudeVisionProcessor';
