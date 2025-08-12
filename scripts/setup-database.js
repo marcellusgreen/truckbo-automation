@@ -14,22 +14,41 @@ const __dirname = path.dirname(__filename);
 
 dotenv.config();
 
-const config = {
-  host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT || '5432'),
-  database: 'postgres', // Connect to default DB first
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || '',
-  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
-};
+// Parse DATABASE_URL or use individual environment variables
+let config;
+
+if (process.env.DATABASE_URL) {
+  // Use DATABASE_URL (Neon, Heroku, etc.)
+  config = {
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false } // Required for cloud databases
+  };
+} else {
+  // Use individual environment variables (local development)
+  config = {
+    host: process.env.DB_HOST || 'localhost',
+    port: parseInt(process.env.DB_PORT || '5432'),
+    database: 'postgres', // Connect to default DB first
+    user: process.env.DB_USER || 'postgres',
+    password: process.env.DB_PASSWORD || '',
+    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+  };
+}
 
 const targetDatabase = process.env.DB_NAME || 'truckbo';
 
 async function createDatabase() {
+  // Skip database creation for cloud services (Neon, Supabase, etc.)
+  if (process.env.DATABASE_URL) {
+    console.log('🌐 Using cloud database - skipping database creation');
+    console.log('📦 Database should already exist in your cloud provider');
+    return;
+  }
+
   const pool = new Pool(config);
   
   try {
-    console.log('🔌 Connecting to PostgreSQL...');
+    console.log('🔌 Connecting to local PostgreSQL...');
     
     // Check if database exists
     const checkResult = await pool.query(
@@ -54,10 +73,23 @@ async function createDatabase() {
 }
 
 async function runMigrations() {
-  const pool = new Pool({
-    ...config,
-    database: targetDatabase, // Now connect to target database
-  });
+  let poolConfig;
+  
+  if (process.env.DATABASE_URL) {
+    // For cloud databases, use the connection string directly
+    poolConfig = {
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false }
+    };
+  } else {
+    // For local databases, connect to the target database
+    poolConfig = {
+      ...config,
+      database: targetDatabase
+    };
+  }
+  
+  const pool = new Pool(poolConfig);
   
   try {
     console.log('🏗️  Running database migrations...');
