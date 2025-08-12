@@ -2,7 +2,32 @@
 // Manages fleet data with PostgreSQL following Data Consistency Architecture Guide
 // Enhanced with comprehensive error handling, field standardization, and logging
 
-import { Pool, PoolClient } from 'pg';
+// Conditional import for browser compatibility
+let Pool: any, PoolClient: any;
+if (typeof window === 'undefined') {
+  // Only import pg in Node.js environment
+  try {
+    const pg = require('pg');
+    Pool = pg.Pool;
+    PoolClient = pg.PoolClient;
+  } catch (error) {
+    console.warn('PostgreSQL (pg) module not available - using fallback mode');
+    Pool = class MockPool {
+      connect() { throw new Error('PostgreSQL not available in browser environment'); }
+      query() { throw new Error('PostgreSQL not available in browser environment'); }
+      end() { return Promise.resolve(); }
+      on() {}
+    };
+  }
+} else {
+  // Browser environment - use mock classes
+  Pool = class MockPool {
+    connect() { throw new Error('PostgreSQL not available in browser environment'); }
+    query() { throw new Error('PostgreSQL not available in browser environment'); }
+    end() { return Promise.resolve(); }
+    on() {}
+  };
+}
 import { truckNumberParser } from './truckNumberParser';
 // import { authService } from './authService'; // Temporarily disabled for build  
 const authService = { getCurrentCompanyId: () => 'default-company' };

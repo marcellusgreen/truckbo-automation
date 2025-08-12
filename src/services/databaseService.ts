@@ -1,7 +1,33 @@
 // PostgreSQL Database Service
 // Handles all database operations for TruckBo fleet compliance system
 
-import { Pool, PoolClient, QueryResult } from 'pg';
+// Conditional import for browser compatibility
+let Pool: any, PoolClient: any, QueryResult: any;
+if (typeof window === 'undefined') {
+  // Only import pg in Node.js environment
+  try {
+    const pg = require('pg');
+    Pool = pg.Pool;
+    PoolClient = pg.PoolClient;
+    QueryResult = pg.QueryResult;
+  } catch (error) {
+    console.warn('PostgreSQL (pg) module not available - using fallback mode');
+    Pool = class MockPool {
+      connect() { throw new Error('PostgreSQL not available in browser environment'); }
+      query() { throw new Error('PostgreSQL not available in browser environment'); }
+      end() { return Promise.resolve(); }
+      on() {}
+    };
+  }
+} else {
+  // Browser environment - use mock classes
+  Pool = class MockPool {
+    connect() { throw new Error('PostgreSQL not available in browser environment'); }
+    query() { throw new Error('PostgreSQL not available in browser environment'); }
+    end() { return Promise.resolve(); }
+    on() {}
+  };
+}
 
 export interface DatabaseConfig {
   host: string;
