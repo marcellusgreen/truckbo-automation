@@ -30,7 +30,7 @@ const authService = {
 import { ExtractedVehicleData } from './services/documentProcessor';
 import { comprehensiveComplianceService } from './services/comprehensiveComplianceApi';
 import { documentDownloadService } from './services/documentDownloadService';
-import { reconcilerAPI, type VehicleSummaryView, type FleetDashboard } from './services/reconcilerAPI';
+import { reconcilerAPI, type VehicleSummaryView, type FleetDashboard } from './services/reconcilerAPI.ts';
 import { mapComplianceToVehicleStatus, mapComplianceToDisplayStatus } from './utils/statusMapping';
 import { safeReconciledVehicleData, safeVehicleData } from './utils/safeDataAccess';
 import { eventBus, FleetEvents } from './services/eventBus';
