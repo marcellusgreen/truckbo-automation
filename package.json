@@ -15,6 +15,7 @@
     "api:test": "tsx src/api/test/api-test.ts",
     "dev:full": "concurrently \"npm run dev\" \"npm run server\"",
     "dev:api": "concurrently \"npm run dev\" \"npm run api:dev\"",
+    "prebuild": "chmod +x node_modules/.bin/vite 2>/dev/null || true",
     "build": "vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",

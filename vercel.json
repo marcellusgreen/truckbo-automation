@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "truckbo-fleet-management",
-  "buildCommand": "npm run build",
+  "buildCommand": "chmod +x node_modules/.bin/vite 2>/dev/null || true && npm run build",
   "outputDirectory": "dist",
   "installCommand": "npm install",
   "rewrites": [
