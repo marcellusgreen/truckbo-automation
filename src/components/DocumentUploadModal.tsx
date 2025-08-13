@@ -84,23 +84,38 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
       );
       
       // Convert to the expected ProcessingResult format for compatibility
+      console.log('🔍 MODAL RESULT CONVERSION DEBUG:');
+      console.log('claudeResult:', claudeResult);
+      console.log('claudeResult.vehicleData:', claudeResult?.vehicleData);
+      console.log('claudeResult.consolidatedVehicles:', claudeResult?.consolidatedVehicles);
+      console.log('claudeResult.claudeResults:', claudeResult?.claudeResults);
+      console.log('selectedFiles:', selectedFiles);
+      console.log('selectedFiles.length:', selectedFiles?.length);
+      
+      // Ensure safe access to all arrays
+      const safeVehicleData = Array.isArray(claudeResult?.vehicleData) ? claudeResult.vehicleData : [];
+      const safeDriverData = Array.isArray(claudeResult?.driverData) ? claudeResult.driverData : [];
+      const safeClaudeResults = Array.isArray(claudeResult?.claudeResults) ? claudeResult.claudeResults : [];
+      const safeSelectedFiles = selectedFiles || { length: 0 };
+      
       const result: ProcessingResult = {
-        vehicleData: claudeResult.vehicleData,
-        driverData: claudeResult.driverData,
-        unprocessedFiles: claudeResult.claudeResults
-          .filter(r => !r.success)
+        vehicleData: safeVehicleData,
+        driverData: safeDriverData,
+        consolidatedVehicles: claudeResult?.consolidatedVehicles || [], // Add the missing consolidated vehicles!
+        unprocessedFiles: safeClaudeResults
+          .filter(r => r && !r.success)
           .map((r, index) => `File ${index + 1}`),
-        errors: claudeResult.claudeResults
-          .filter(r => !r.success)
-          .map((r, index) => ({ fileName: `File ${index + 1}`, error: r.error || 'Unknown error' })),
+        errors: safeClaudeResults
+          .filter(r => r && !r.success)
+          .map((r, index) => ({ fileName: `File ${index + 1}`, error: r?.error || 'Unknown error' })),
         summary: {
-          totalFiles: selectedFiles.length,
-          processed: claudeResult.processingStats.processedFiles,
-          registrationDocs: claudeResult.processingStats.claudeStats?.documentTypes?.registration || 0,
-          insuranceDocs: claudeResult.processingStats.claudeStats?.documentTypes?.insurance || 0,
-          medicalCertificates: claudeResult.processingStats.claudeStats?.documentTypes?.medical_certificate || 0,
-          cdlDocuments: claudeResult.processingStats.claudeStats?.documentTypes?.cdl_license || 0,
-          duplicatesFound: selectedFiles.length - claudeResult.vehicleData.length
+          totalFiles: safeSelectedFiles.length || 0,
+          processed: claudeResult?.processingStats?.processedFiles || 0,
+          registrationDocs: claudeResult?.processingStats?.claudeStats?.documentTypes?.registration || 0,
+          insuranceDocs: claudeResult?.processingStats?.claudeStats?.documentTypes?.insurance || 0,
+          medicalCertificates: claudeResult?.processingStats?.claudeStats?.documentTypes?.medical_certificate || 0,
+          cdlDocuments: claudeResult?.processingStats?.claudeStats?.documentTypes?.cdl_license || 0,
+          duplicatesFound: Math.max(0, (safeSelectedFiles.length || 0) - safeVehicleData.length)
         }
       };
       
@@ -125,9 +140,22 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
       onDocumentsProcessed(processingResult.vehicleData);
       setStep('complete');
       
+      // **HIGH PRIORITY FIX: Clear cache and trigger refresh**
+      console.log('🔄 Clearing reconciler cache and triggering data refresh...');
+      
+      // Clear reconciler API cache to force fresh data fetch
+      import('../services/reconcilerAPI').then(({ reconcilerAPI }) => {
+        reconcilerAPI.clearCache();
+        console.log('✅ ReconcilerAPI cache cleared');
+      });
+      
       // Auto-close after showing success
       setTimeout(() => {
         handleClose();
+        
+        // **Trigger parent component refresh after modal closes**
+        console.log('🔄 Triggering parent component data refresh...');
+        // The onDocumentsProcessed callback should handle the refresh
       }, 2000);
     }
   };
@@ -195,11 +223,17 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
                       <li>✅ Vehicle registration documents</li>
                       <li>✅ Insurance certificates and policies</li>
                       <li>✅ Title documents</li>
-                      <li>✅ PDF, JPG, PNG, and DOC files</li>
+                      <li>✅ <strong>PDF files</strong> (processed on server with full Claude Vision support)</li>
+                      <li>✅ <strong>JPG, PNG images</strong> (processed in browser with Claude Vision)</li>
                     </ul>
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-3">
+                      <p className="text-green-800 text-xs font-medium">
+                        🚀 Hybrid Processing: PDFs → Server | Images → Browser - Best of both worlds!
+                      </p>
+                    </div>
                     <div className="bg-blue-100 rounded-lg p-3">
                       <p className="text-blue-800 text-xs font-medium">
-                        💡 Pro Tip: Organize your files with clear names like "truck_123_registration.pdf" or "insurance_policy_2024.pdf"
+                        💡 Pro Tip: Name your images clearly like "truck_123_registration.jpg" or "insurance_policy_2024.png"
                       </p>
                     </div>
                   </div>
@@ -335,7 +369,7 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
                   <h3 className="text-xl font-bold text-green-800">Processing Complete!</h3>
                 </div>
                 
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
                   <div className="text-center">
                     <div className="text-2xl font-bold text-green-600">{processingResult.summary.totalFiles}</div>
                     <div className="text-sm text-green-700">Files Uploaded</div>
@@ -343,6 +377,18 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
                   <div className="text-center">
                     <div className="text-2xl font-bold text-blue-600">{processingResult.summary.processed}</div>
                     <div className="text-sm text-blue-700">Successfully Processed</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-emerald-600">{(() => {
+                      const count = (processingResult.consolidatedVehicles?.length || processingResult.vehicleData.length);
+                      console.log('🔍 SUMMARY COUNT DEBUG:', {
+                        consolidatedVehicles: processingResult.consolidatedVehicles?.length,
+                        vehicleData: processingResult.vehicleData.length,
+                        finalCount: count
+                      });
+                      return count;
+                    })()}</div>
+                    <div className="text-sm text-emerald-700">Vehicles Found</div>
                   </div>
                   <div className="text-center">
                     <div className="text-2xl font-bold text-purple-600">{processingResult.summary.registrationDocs}</div>
@@ -449,7 +495,15 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
                   onClick={acceptResults}
                   className="flex-2 px-8 py-3 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white rounded-xl font-bold transition-all duration-200 hover:scale-105 active:scale-95"
                 >
-                  ✅ Add {processingResult.vehicleData.length} Vehicles to Fleet
+                  ✅ Add {(() => {
+                    const count = (processingResult.consolidatedVehicles?.length || processingResult.vehicleData.length);
+                    console.log('🔍 BUTTON COUNT DEBUG:', {
+                      consolidatedVehicles: processingResult.consolidatedVehicles?.length,
+                      vehicleData: processingResult.vehicleData.length,
+                      finalCount: count
+                    });
+                    return count;
+                  })()} Vehicles to Fleet
                 </button>
               </div>
             </div>

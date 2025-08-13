@@ -1,5 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk';
-import pdfParse from 'pdf-parse';
+import { DocumentTriagingService, type TriagingResult } from './documentTriagingService';
+import { FileTypeDetector } from './fileTypeDetector';
+import { serverPDFService } from './serverPDFService';
+import OptimizedClaudePrompts from './optimizedClaudePrompts';
+import { flexibleValidator, type FlexibleValidationResult } from './flexibleValidator';
+import { vehicleReconciler } from './vehicleReconciler';
+
 
 export interface ExtractedDocumentData {
   documentType: 'registration' | 'insurance' | 'medical_certificate' | 'cdl_license' | 'inspection' | 'permit' | 'unknown';
@@ -73,6 +79,19 @@ export interface ExtractedDocumentData {
   processingNotes?: string[];
   requiresReview?: boolean;
   autoApprovalRecommended?: boolean;
+  
+  // Flexible validation results
+  flexibleValidation?: FlexibleValidationResult;
+  
+  // Vehicle reconciliation results
+  reconciliation?: {
+    vehicleVIN: string;
+    success: boolean;
+    conflicts?: any[];
+    warnings?: string[];
+    vehicleDocumentCount?: number;
+    complianceStatus?: string;
+  };
 }
 
 export interface ClaudeProcessingResult {
@@ -80,6 +99,7 @@ export interface ClaudeProcessingResult {
   data?: ExtractedDocumentData;
   error?: string;
   processingTime?: number;
+  triageInfo?: TriagingResult;
 }
 
 class ClaudeVisionProcessor {
@@ -87,7 +107,8 @@ class ClaudeVisionProcessor {
   private isInitialized = false;
 
   constructor() {
-    const apiKey = process.env.ANTHROPIC_API_KEY || import.meta.env.VITE_ANTHROPIC_API_KEY;
+    // Get API key from environment variables (browser-compatible)
+    const apiKey = (typeof process !== 'undefined' && process.env?.ANTHROPIC_API_KEY) || import.meta.env.VITE_ANTHROPIC_API_KEY;
     
     if (!apiKey) {
       console.warn('Claude API key not found. Document processing will be limited.');
@@ -96,6 +117,7 @@ class ClaudeVisionProcessor {
 
     this.anthropic = new Anthropic({
       apiKey: apiKey,
+      dangerouslyAllowBrowser: true,
     });
     this.isInitialized = true;
   }
@@ -118,6 +140,61 @@ class ClaudeVisionProcessor {
         throw new Error('Claude Vision processor not initialized. Check API key.');
       }
 
+      // Step 1: Analyze file for appropriate processing route
+      let triageResult: TriagingResult | null = null;
+      if (file instanceof File) {
+        triageResult = DocumentTriagingService.analyzeFile(file);
+        
+        // Log triaging decision
+        console.log(`📋 Document Triage Result for "${file.name}":`, {
+          tool: triageResult.recommended_tool,
+          type: triageResult.file_type_detected,
+          reasoning: triageResult.reasoning,
+          expectedData: triageResult.expected_compliance_data
+        });
+
+        // Handle unsupported files
+        if (!triageResult.should_process) {
+          return {
+            success: false,
+            error: triageResult.reasoning,
+            processingTime: Date.now() - startTime,
+            triageInfo: triageResult
+          };
+        }
+
+        // Handle files that should go to CLAUDE_CODE instead
+        if (triageResult.recommended_tool === 'CLAUDE_CODE') {
+          return {
+            success: false,
+            error: `${triageResult.file_type_detected} should be processed with structured data parser, not vision AI. ${triageResult.reasoning}`,
+            processingTime: Date.now() - startTime,
+            triageInfo: triageResult
+          };
+        }
+
+        // Handle PDF files that were routed to CLAUDE_TEXT (now deprecated)
+        if (triageResult.recommended_tool === 'CLAUDE_TEXT') {
+          console.log(`⚠️ CLAUDE_TEXT routing is deprecated for ${file.name}. PDFs not supported in browser.`);
+          return {
+            success: false,
+            error: `PDF processing not supported. Please convert "${file.name}" to JPG or PNG format.`,
+            processingTime: Date.now() - startTime,
+            triageInfo: triageResult
+          };
+        }
+
+        // Continue with CLAUDE_VISION processing for visual documents
+        if (triageResult.recommended_tool !== 'CLAUDE_VISION') {
+          return {
+            success: false,
+            error: 'File type not suitable for vision processing',
+            processingTime: Date.now() - startTime,
+            triageInfo: triageResult
+          };
+        }
+      }
+
       if (!this.anthropic) {
         throw new Error('Claude API client not initialized.');
       }
@@ -127,31 +204,179 @@ class ClaudeVisionProcessor {
       let mimeType: string;
 
       if (file.type === 'application/pdf') {
-        // Handle PDF files
-        const arrayBuffer = await file.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
+        // Use server-side processing for PDFs (full Claude Vision PDF support)
+        console.log(`📄 PDF file detected: ${file.name} - routing to server for processing`);
         
-        // Extract text from PDF first
-        const pdfData = await pdfParse(buffer);
+        try {
+          // Check if server is available
+          const serverAvailable = await serverPDFService.checkServerHealth();
+          
+          if (!serverAvailable) {
+            return {
+              success: false,
+              error: `PDF processing server is not available. "${file.name}" cannot be processed.\n\n📋 Options:\n• Start the PDF processing server (npm run server)\n• Convert PDF to JPG/PNG and upload as image\n• Use server-side deployment for full PDF support`,
+              processingTime: Date.now() - startTime
+            };
+          }
+          
+          // Process PDF on server with Claude Vision
+          const serverResult = await serverPDFService.processPDF(file);
+          
+          if (!serverResult.success) {
+            return {
+              success: false,
+              error: `Server PDF processing failed: ${serverResult.error}`,
+              processingTime: Date.now() - startTime
+            };
+          }
+          
+          // Process server result and add to reconciliation system
+          const extractedData = serverResult.data || {};
+          
+          // Add document to reconciliation system
+          console.log('🔄 Adding PDF document to vehicleReconciler:', {
+            fileName: file?.name || 'unknown_document',
+            extractedVIN: extractedData.vin || 'No VIN found',
+            serverProcessing: true
+          });
+          
+          const reconciliationResult = await vehicleReconciler.addDocument(
+            extractedData, 
+            { 
+              fileName: file?.name || 'unknown_document',
+              source: 'server_pdf_processing',
+              uploadDate: new Date().toISOString()
+            }
+          );
+          
+          console.log('✅ PDF Reconciliation result:', reconciliationResult);
+
+          // Sync the successfully added vehicle data to persistentFleetStorage
+          if (reconciliationResult.success && reconciliationResult.vehicleVIN) {
+            console.log('🔄 Syncing reconciler data to persistentFleetStorage for VIN:', reconciliationResult.vehicleVIN);
+            try {
+              const { persistentFleetStorage } = await import('./persistentFleetStorage');
+              
+              // Get the vehicle data from vehicleReconciler
+              const vehicleRecord = vehicleReconciler.getVehicleSummary(reconciliationResult.vehicleVIN);
+              
+              if (vehicleRecord) {
+                // Convert vehicle data from reconciler format to persistentFleetStorage format  
+                const vehicleToSync = {
+                  vin: vehicleRecord.vin || 'UNKNOWN',
+                  make: vehicleRecord.make || 'Unknown',
+                  model: vehicleRecord.model || 'Unknown',
+                  year: vehicleRecord.year || new Date().getFullYear(),
+                  licensePlate: vehicleRecord.licensePlate || 'Unknown', 
+                  truckNumber: vehicleRecord.truckNumber || `Truck-${vehicleRecord.vin?.slice(-4) || 'XXXX'}`,
+                  status: 'active' as const,
+                  
+                  // Registration data from documents
+                  registrationNumber: vehicleRecord.registrationNumber,
+                  registrationState: vehicleRecord.registrationState, 
+                  registrationExpirationDate: vehicleRecord.registrationExpirationDate,
+                  registeredOwner: vehicleRecord.registeredOwner,
+                  
+                  // Insurance data from documents
+                  insuranceCarrier: vehicleRecord.insuranceCarrier,
+                  policyNumber: vehicleRecord.policyNumber,
+                  insuranceExpirationDate: vehicleRecord.insuranceExpirationDate,
+                  coverageAmount: vehicleRecord.coverageAmount,
+                  
+                  // DOT compliance
+                  dotNumber: vehicleRecord.dotNumber,
+                  
+                  // Metadata
+                  dataSource: 'document_processing' as const,
+                  lastUpdated: new Date().toISOString()
+                };
+
+                // Add vehicle to persistent storage (handle both sync and async)
+                try {
+                  let syncResult;
+                  if (typeof persistentFleetStorage.addVehicle === 'function') {
+                    // Try async first (PostgreSQL), then sync (localStorage)
+                    const result = persistentFleetStorage.addVehicle(vehicleToSync);
+                    if (result && typeof result.then === 'function') {
+                      syncResult = await result;
+                    } else {
+                      syncResult = result;
+                    }
+                  }
+                  
+                  // Also try the async method if available
+                  if (!syncResult && typeof (persistentFleetStorage as any).addVehicleAsync === 'function') {
+                    syncResult = await (persistentFleetStorage as any).addVehicleAsync(vehicleToSync);
+                  }
+                  
+                  console.log('✅ Successfully synced vehicle to persistentFleetStorage:', syncResult);
+                } catch (addVehicleError) {
+                  console.warn('⚠️ Failed to add vehicle to storage:', addVehicleError);
+                  // Try alternative sync method for async storage
+                  try {
+                    if (typeof (persistentFleetStorage as any).getFleetAsync === 'function') {
+                      console.log('🔄 Attempting async fleet sync...');
+                      const currentFleet = await (persistentFleetStorage as any).getFleetAsync();
+                      // Add to current fleet and save
+                      const updatedFleet = [...currentFleet, { ...vehicleToSync, id: `vehicle_${Date.now()}`, dateAdded: new Date().toISOString() }];
+                      if (typeof (persistentFleetStorage as any).saveFleetAsync === 'function') {
+                        await (persistentFleetStorage as any).saveFleetAsync(updatedFleet);
+                        console.log('✅ Vehicle synced via async fleet save');
+                      }
+                    }
+                  } catch (asyncError) {
+                    console.warn('⚠️ Async sync also failed:', asyncError);
+                  }
+                }
+              } else {
+                console.warn('⚠️ Could not retrieve vehicle record from reconciler for VIN:', reconciliationResult.vehicleVIN);
+              }
+              
+            } catch (syncError) {
+              console.warn('⚠️ Could not sync to persistentFleetStorage:', syncError);
+              // Don't fail the whole operation if sync fails
+            }
+          }
+
+          // Convert server result to expected format
+          return {
+            success: true,
+            data: serverResult.data,
+            processingTime: serverResult.processingTime,
+            triageInfo: triageResult,
+            reconciliationResult: reconciliationResult
+          };
+          
+        } catch (error) {
+          console.error('Server PDF processing error:', error);
+          return {
+            success: false,
+            error: `PDF processing failed: ${error instanceof Error ? error.message : 'Server error'}. Try converting to JPG/PNG or check server status.`,
+            processingTime: Date.now() - startTime
+          };
+        }
         
-        // Convert PDF to image for vision processing (simplified approach)
-        // In production, you might want to use pdf2pic or similar
-        mimeType = 'text/plain';
-        base64Data = Buffer.from(pdfData.text).toString('base64');
-        
-        // For now, process as text
-        return await this.processTextDocument(pdfData.text, options, startTime);
-        
-      } else if (file.type.startsWith('image/')) {
-        // Handle image files
+      } else if (file.type === 'image/jpeg' || file.type === 'image/png' || file.type === 'image/gif' || file.type === 'image/webp') {
+        // Handle supported image files - Use browser-compatible base64 conversion
         mimeType = file.type;
         const arrayBuffer = await file.arrayBuffer();
-        base64Data = Buffer.from(arrayBuffer).toString('base64');
+        const uint8Array = new Uint8Array(arrayBuffer);
+        
+        // Convert to base64 for processing
+        let binaryString = '';
+        for (let i = 0; i < uint8Array.length; i++) {
+          binaryString += String.fromCharCode(uint8Array[i]);
+        }
+        base64Data = btoa(binaryString);
         
         return await this.processImageDocument(base64Data, mimeType, options, startTime);
         
+      } else if (file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || file.type === 'application/vnd.ms-excel') {
+        // Handle Excel files - Claude Vision can't process these directly
+        throw new Error('Excel files cannot be processed with vision AI. Please convert to PDF format first.');
+        
       } else {
-        throw new Error(`Unsupported file type: ${file.type}`);
+        throw new Error(`Unsupported file type: ${file.type}. Supported formats: PDF, JPG, PNG, GIF, WEBP.`);
       }
       
     } catch (error) {
@@ -174,7 +399,7 @@ class ClaudeVisionProcessor {
     startTime: number
   ): Promise<ClaudeProcessingResult> {
     
-    const prompt = this.buildExtractionPrompt(options.expectedDocumentType);
+    const prompt = OptimizedClaudePrompts.buildImageExtractionPrompt(options.expectedDocumentType);
     
     try {
       const response = await this.anthropic!.messages.create({
@@ -199,9 +424,9 @@ class ClaudeVisionProcessor {
         }],
       });
 
-      // Parse Claude's response
+      // Parse Claude's optimized response
       const responseText = response.content[0]?.type === 'text' ? response.content[0].text : '';
-      const extractedData = this.parseClaudeResponse(responseText);
+      const extractedData = await this.parseOptimizedClaudeResponse(responseText);
 
       return {
         success: true,
@@ -220,7 +445,7 @@ class ClaudeVisionProcessor {
   }
 
   /**
-   * Process text document (from PDF)
+   * Process text document (from PDF) with optimized prompts
    */
   private async processTextDocument(
     text: string,
@@ -228,7 +453,7 @@ class ClaudeVisionProcessor {
     startTime: number
   ): Promise<ClaudeProcessingResult> {
     
-    const prompt = this.buildTextExtractionPrompt(text, options.expectedDocumentType);
+    const prompt = OptimizedClaudePrompts.buildTextExtractionPrompt(text, options.expectedDocumentType);
     
     try {
       const response = await this.anthropic!.messages.create({
@@ -241,7 +466,7 @@ class ClaudeVisionProcessor {
       });
 
       const responseText = response.content[0]?.type === 'text' ? response.content[0].text : '';
-      const extractedData = this.parseClaudeResponse(responseText);
+      const extractedData = await this.parseOptimizedClaudeResponse(responseText);
 
       return {
         success: true,
@@ -258,6 +483,7 @@ class ClaudeVisionProcessor {
       };
     }
   }
+
 
   /**
    * Build extraction prompt for image documents
@@ -500,7 +726,114 @@ Focus on:
   }
 
   /**
-   * Parse Claude's JSON response with enhanced edge case handling
+   * Parse Claude's optimized JSON response with enhanced VIN and date recognition
+   */
+  private async parseOptimizedClaudeResponse(responseText: string): Promise<ExtractedDocumentData> {
+    try {
+      // Try to extract JSON from response
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        throw new Error('No JSON found in response');
+      }
+
+      const parsed = JSON.parse(jsonMatch[0]);
+      
+      // Handle the new optimized response structure
+      const extractedData = this.convertOptimizedResponseToStandard(parsed);
+      
+      // Apply flexible validation (never fails completely)
+      const flexibleValidation = flexibleValidator.validateExtraction(
+        extractedData.extractedData, 
+        extractedData.documentType
+      );
+      
+      // Apply legacy validation for backward compatibility
+      const validationResult = this.validateAndScoreExtractedData(extractedData);
+      
+      // Use flexible validation results to override strict validation when beneficial
+      const finalConfidence = Math.max(
+        flexibleValidation.confidence_score / 100, 
+        validationResult.adjustedConfidence
+      );
+      
+      const requiresReview = flexibleValidation.status === 'needs_review' || 
+                           (flexibleValidation.status === 'success_with_warnings' && flexibleValidation.confidence_score < 70);
+      
+      const autoApprovalRecommended = flexibleValidation.validation_summary.processing_recommendation === 'auto_approve';
+
+      // Add document to reconciliation system
+      console.log('🔄 Adding document to vehicleReconciler:', {
+        fileName: file?.name || 'unknown_document',
+        extractedVIN: extractedData.vin || 'No VIN found',
+        flexibleValidation: flexibleValidation.status
+      });
+      
+      const reconciliationResult = await vehicleReconciler.addDocument(
+        { ...extractedData, flexibleValidation }, 
+        { 
+          fileName: file?.name || 'unknown_document',
+          source: 'claude_vision_processing',
+          uploadDate: new Date().toISOString()
+        }
+      );
+      
+      console.log('✅ Reconciliation result:', reconciliationResult);
+
+      const result: ExtractedDocumentData = {
+        documentType: extractedData.documentType || 'unknown',
+        confidence: finalConfidence,
+        extractedData: validationResult.validatedData,
+        
+        // Enhanced validation results
+        fieldConfidence: validationResult.fieldConfidence,
+        dataQuality: validationResult.dataQuality,
+        conflicts: {
+          hasConflicts: parsed.conflicts?.hasConflicts ?? false,
+          conflictDetails: parsed.conflicts?.conflictDetails || []
+        },
+        validationResults: validationResult.validationResults,
+        
+        rawText: responseText,
+        processingNotes: [
+          ...validationResult.processingNotes,
+          `Flexible validation: ${flexibleValidation.status} (${flexibleValidation.confidence_score}% confidence)`,
+          ...flexibleValidation.suggestions
+        ],
+        requiresReview,
+        autoApprovalRecommended,
+        
+        // Include flexible validation results
+        flexibleValidation,
+        
+        // Include reconciliation results
+        reconciliation: reconciliationResult.success ? {
+          vehicleVIN: reconciliationResult.vehicleVIN!,
+          success: true,
+          conflicts: reconciliationResult.conflicts,
+          warnings: reconciliationResult.warnings,
+          vehicleDocumentCount: reconciliationResult.vehicleVIN ? 
+            vehicleReconciler.getVehicleSummary(reconciliationResult.vehicleVIN)?.documentCount : undefined,
+          complianceStatus: reconciliationResult.vehicleVIN ?
+            vehicleReconciler.getVehicleSummary(reconciliationResult.vehicleVIN)?.complianceStatus.overall : undefined
+        } : {
+          vehicleVIN: 'unknown',
+          success: false,
+          warnings: reconciliationResult.warnings
+        }
+      };
+
+      return result;
+
+    } catch (error) {
+      console.error('Error parsing optimized Claude response:', error);
+      
+      // Return fallback result
+      return this.createFallbackResponse(responseText);
+    }
+  }
+
+  /**
+   * Parse legacy Claude response format for backward compatibility
    */
   private parseClaudeResponse(responseText: string): ExtractedDocumentData {
     try {
@@ -538,36 +871,145 @@ Focus on:
       return result;
 
     } catch (error) {
-      console.error('Error parsing Claude response:', error);
-      
-      // Return fallback result with enhanced structure
-      return {
-        documentType: 'unknown',
-        confidence: 0.1,
-        extractedData: {},
-        fieldConfidence: {},
-        dataQuality: {
-          isComplete: false,
-          missingCriticalFields: ['ALL'],
-          invalidFields: [{ field: 'parsing', issue: 'Failed to parse Claude response' }],
-          qualityScore: 0.1
-        },
-        conflicts: {
-          hasConflicts: false,
-          conflictDetails: []
-        },
-        validationResults: {
-          vinValid: false,
-          datesRealistic: false,
-          documentsExpired: false,
-          requiresImmediateAction: true
-        },
-        rawText: responseText,
-        processingNotes: ['Failed to parse structured response', 'Requires manual review'],
-        requiresReview: true,
-        autoApprovalRecommended: false
-      };
+      console.error('Error parsing legacy Claude response:', error);
+      return this.createFallbackResponse(responseText);
     }
+  }
+
+  /**
+   * Convert optimized Claude response structure to standard format
+   */
+  private convertOptimizedResponseToStandard(parsed: any): any {
+    const extractedData: any = {};
+    
+    // Extract VINs - use the first high-confidence VIN
+    if (parsed.vins && parsed.vins.length > 0) {
+      const bestVin = parsed.vins.find((v: any) => v.confidence === 'high') || parsed.vins[0];
+      extractedData.vin = bestVin.vin;
+    }
+    
+    // Extract dates - categorize by type
+    if (parsed.dates && parsed.dates.length > 0) {
+      parsed.dates.forEach((dateObj: any) => {
+        switch (dateObj.type) {
+          case 'registration_expiry':
+            extractedData.expirationDate = dateObj.date;
+            break;
+          case 'insurance_expiry':
+            extractedData.expirationDate = dateObj.date;
+            break;
+          case 'license_expiry':
+            extractedData.expirationDate = dateObj.date;
+            break;
+          case 'inspection_due':
+            extractedData.expirationDate = dateObj.date;
+            break;
+          case 'issue_date':
+            extractedData.issueDate = dateObj.date;
+            break;
+          case 'effective_date':
+            extractedData.effectiveDate = dateObj.date;
+            break;
+          default:
+            // Use the first date as fallback
+            if (!extractedData.expirationDate) {
+              extractedData.expirationDate = dateObj.date;
+            }
+        }
+      });
+    }
+    
+    // Extract vehicle information
+    if (parsed.vehicle_info) {
+      extractedData.make = parsed.vehicle_info.make;
+      extractedData.model = parsed.vehicle_info.model;
+      extractedData.year = parsed.vehicle_info.year;
+      extractedData.licensePlate = parsed.vehicle_info.license_plate;
+      extractedData.state = parsed.vehicle_info.state;
+    }
+    
+    // Extract document-specific information
+    if (parsed.document_specific) {
+      const docData = parsed.document_specific;
+      
+      // Registration data
+      if (docData.registration) {
+        extractedData.registrationNumber = docData.registration.registration_number;
+        extractedData.ownerName = docData.registration.owner_name;
+      }
+      
+      // Insurance data
+      if (docData.insurance) {
+        extractedData.policyNumber = docData.insurance.policy_number;
+        extractedData.insuranceCompany = docData.insurance.insurance_company;
+        extractedData.coverageAmount = docData.insurance.coverage_amount;
+      }
+      
+      // CDL data
+      if (docData.cdl) {
+        extractedData.driverName = docData.cdl.driver_name;
+        extractedData.licenseNumber = docData.cdl.license_number;
+        extractedData.licenseClass = docData.cdl.license_class;
+        extractedData.endorsements = docData.cdl.endorsements;
+      }
+      
+      // Medical data
+      if (docData.medical) {
+        extractedData.driverName = docData.medical.driver_name;
+        extractedData.medicalExaminerName = docData.medical.examiner_name;
+        extractedData.medicalCertificateNumber = docData.medical.certificate_number;
+      }
+    }
+    
+    return {
+      documentType: parsed.document_type,
+      confidence: this.convertConfidenceToNumeric(parsed.confidence),
+      extractedData
+    };
+  }
+  
+  /**
+   * Convert confidence strings to numeric values
+   */
+  private convertConfidenceToNumeric(confidence: string): number {
+    switch (confidence?.toLowerCase()) {
+      case 'high': return 0.9;
+      case 'medium': return 0.7;
+      case 'low': return 0.5;
+      default: return 0.5;
+    }
+  }
+  
+  /**
+   * Create standardized fallback response for parsing errors
+   */
+  private createFallbackResponse(responseText: string): ExtractedDocumentData {
+    return {
+      documentType: 'unknown',
+      confidence: 0.1,
+      extractedData: {},
+      fieldConfidence: {},
+      dataQuality: {
+        isComplete: false,
+        missingCriticalFields: ['ALL'],
+        invalidFields: [{ field: 'parsing', issue: 'Failed to parse Claude response' }],
+        qualityScore: 0.1
+      },
+      conflicts: {
+        hasConflicts: false,
+        conflictDetails: []
+      },
+      validationResults: {
+        vinValid: false,
+        datesRealistic: false,
+        documentsExpired: false,
+        requiresImmediateAction: true
+      },
+      rawText: responseText,
+      processingNotes: ['Failed to parse structured response', 'Requires manual review'],
+      requiresReview: true,
+      autoApprovalRecommended: false
+    };
   }
 
   /**
@@ -1698,7 +2140,7 @@ Focus on:
         sum + (r.data?.confidence || 0), 0) / successfulResults.length;
         
       stats.averageQualityScore = successfulResults.reduce((sum, r) => 
-        sum + (r.data?.dataQuality.qualityScore || 0), 0) / successfulResults.length;
+        sum + (r.data?.dataQuality?.qualityScore || 0), 0) / successfulResults.length;
         
       // Analyze each successful result
       successfulResults.forEach(r => {
@@ -1713,32 +2155,32 @@ Focus on:
           if (data.requiresReview) {
             stats.requiresReview++;
             
-            // Categorize review reasons
+            // Categorize review reasons (with safe array access)
             if (data.confidence < 0.8) stats.reviewReasons.lowConfidence++;
-            if (data.dataQuality.missingCriticalFields.length > 0) stats.reviewReasons.missingFields++;
-            if (data.dataQuality.invalidFields.length > 0) stats.reviewReasons.invalidData++;
-            if (data.conflicts.hasConflicts) stats.reviewReasons.conflicts++;
-            if (data.validationResults.documentsExpired) stats.reviewReasons.expiredDocs++;
-            if (data.dataQuality.qualityScore < 0.6) stats.reviewReasons.poorQuality++;
+            if ((data.dataQuality?.missingCriticalFields?.length || 0) > 0) stats.reviewReasons.missingFields++;
+            if ((data.dataQuality?.invalidFields?.length || 0) > 0) stats.reviewReasons.invalidData++;
+            if (data.conflicts?.hasConflicts) stats.reviewReasons.conflicts++;
+            if (data.validationResults?.documentsExpired) stats.reviewReasons.expiredDocs++;
+            if ((data.dataQuality?.qualityScore || 0) < 0.6) stats.reviewReasons.poorQuality++;
           }
           
           if (data.autoApprovalRecommended) stats.autoApprovalRecommended++;
-          if (data.conflicts.hasConflicts) stats.conflictsDetected++;
-          if (data.dataQuality.invalidFields.length > 0) stats.invalidDataFound++;
-          if (data.dataQuality.missingCriticalFields.length > 0) stats.missingCriticalFields++;
-          if (data.validationResults.documentsExpired) stats.expiredDocuments++;
+          if (data.conflicts?.hasConflicts) stats.conflictsDetected++;
+          if ((data.dataQuality?.invalidFields?.length || 0) > 0) stats.invalidDataFound++;
+          if ((data.dataQuality?.missingCriticalFields?.length || 0) > 0) stats.missingCriticalFields++;
+          if (data.validationResults?.documentsExpired) stats.expiredDocuments++;
           
           // Quality metrics
-          if (data.confidence >= 0.9 && data.dataQuality.isComplete) {
+          if (data.confidence >= 0.9 && data.dataQuality?.isComplete) {
             stats.highQualityDocuments++;
           }
           
           // Validation metrics
-          if (!data.validationResults.vinValid) stats.vinValidationFailures++;
-          if (!data.validationResults.datesRealistic) stats.dateValidationFailures++;
+          if (!data.validationResults?.vinValid) stats.vinValidationFailures++;
+          if (!data.validationResults?.datesRealistic) stats.dateValidationFailures++;
           
           // Completeness
-          if (data.dataQuality.isComplete) {
+          if (data.dataQuality?.isComplete) {
             stats.completeDocuments++;
           } else {
             stats.incompleteDocuments++;

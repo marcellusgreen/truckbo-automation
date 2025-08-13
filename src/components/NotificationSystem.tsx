@@ -9,7 +9,7 @@ export function NotificationSystem() {
 
   useEffect(() => {
     // Subscribe to notifications
-    const unsubscribe = errorHandler.subscribeToNotifications(setNotifications);
+    const unsubscribe = errorHandler.onNotificationsChange(setNotifications);
     
     // Load initial notifications
     setNotifications(errorHandler.getNotifications());
