@@ -432,28 +432,7 @@ class Logger {
     }, null, 2);
   }
 
-  /**
-   * Start an operation and return an operation ID for tracking
-   */
-  startOperation(operation: string, context: LogContext = {}, data?: any): string {
-    const operationId = `op_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    this.debug(`Starting operation: ${operation}`, context, data);
-    return operationId;
-  }
-
-  /**
-   * Complete an operation successfully
-   */
-  completeOperation(operation: string, operationId: string, context: LogContext = {}, data?: any): void {
-    this.info(`Completed operation: ${operation}`, context, data);
-  }
-
-  /**
-   * Mark an operation as failed
-   */
-  failOperation(operation: string, operationId: string, error: Error, context: LogContext = {}, data?: any): void {
-    this.error(`Failed operation: ${operation}`, context, error, data);
-  }
+  
 
   /**
    * Get session info
