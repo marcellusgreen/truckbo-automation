@@ -9,6 +9,7 @@ import multer from 'multer';
 import dotenv from 'dotenv';
 import ServerPDFProcessor from './pdfProcessor.js';
 import authRouter from './routes/auth.js';
+import fleetRouter from './routes/fleet.js';
 
 dotenv.config();
 
@@ -24,6 +25,9 @@ app.use(express.json({ limit: '50mb' }));
 
 // Authentication routes
 app.use('/api/auth', authRouter);
+
+// Fleet management routes
+app.use('/api/fleet', fleetRouter);
 
 // Configure multer for file uploads
 const upload = multer({

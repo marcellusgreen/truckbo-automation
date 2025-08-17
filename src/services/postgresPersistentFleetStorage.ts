@@ -1,33 +1,6 @@
-// PostgreSQL-based Persistent Fleet Storage Service
-// Manages fleet data with PostgreSQL following Data Consistency Architecture Guide
+// API-based Persistent Fleet Storage Service
+// Manages fleet data via backend API endpoints following security best practices
 // Enhanced with comprehensive error handling, field standardization, and logging
-
-// Conditional import for browser compatibility
-let Pool: any, PoolClient: any;
-if (typeof window === 'undefined') {
-  // Only import pg in Node.js environment
-  try {
-    const pg = require('pg');
-    Pool = pg.Pool;
-    PoolClient = pg.PoolClient;
-  } catch (error) {
-    console.warn('PostgreSQL (pg) module not available - using fallback mode');
-    Pool = class MockPool {
-      connect() { throw new Error('PostgreSQL not available in browser environment'); }
-      query() { throw new Error('PostgreSQL not available in browser environment'); }
-      end() { return Promise.resolve(); }
-      on() {}
-    };
-  }
-} else {
-  // Browser environment - use mock classes
-  Pool = class MockPool {
-    connect() { throw new Error('PostgreSQL not available in browser environment'); }
-    query() { throw new Error('PostgreSQL not available in browser environment'); }
-    end() { return Promise.resolve(); }
-    on() {}
-  };
-}
 import { truckNumberParser } from './truckNumberParser';
 // import { authService } from './authService'; // Temporarily disabled for build  
 const authService = { getCurrentCompanyId: () => 'default-company' };
@@ -140,29 +113,12 @@ export interface DriverRecord {
 }
 
 class PostgresPersistentFleetStorage {
-  private pool: Pool;
   private listeners: (() => void)[] = [];
   private readonly DEFAULT_ORG_ID = '550e8400-e29b-41d4-a716-446655440000'; // Sample org from schema
+  private readonly API_BASE_URL = '/api';
 
   constructor() {
-    // Parse DATABASE_URL from environment
-    const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) {
-      throw new Error('DATABASE_URL environment variable is required');
-    }
-
-    this.pool = new Pool({
-      connectionString: databaseUrl,
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-      max: 20,
-      connectionTimeoutMillis: 30000,
-      idleTimeoutMillis: 30000,
-    });
-
-    // Handle pool errors
-    this.pool.on('error', (err) => {
-      console.error('Unexpected error on idle PostgreSQL client', err);
-    });
+    // No database connection needed - using API endpoints
   }
 
   // Get organization ID (for now using default, later can be from auth)
@@ -175,7 +131,7 @@ class PostgresPersistentFleetStorage {
   }
 
   /**
-   * Initialize database connection and test connectivity
+   * Initialize API connection and test connectivity
    */
   async initialize(): Promise<void> {
     const context: LogContext = {
@@ -185,19 +141,21 @@ class PostgresPersistentFleetStorage {
     };
 
     try {
-      const client = await this.pool.connect();
-      await client.query('SELECT NOW()');
-      client.release();
-      logger.info('✅ PostgreSQL database connected successfully', context);
+      // Test API connectivity by trying to fetch fleet stats
+      const response = await fetch(`${this.API_BASE_URL}/fleet/stats`);
+      if (!response.ok) {
+        throw new Error(`API connectivity test failed: ${response.status}`);
+      }
+      logger.info('✅ API endpoints connected successfully', context);
     } catch (error) {
       const appError = errorHandler.createStorageError(
-        `Failed to connect to PostgreSQL: ${(error as Error).message}`,
+        `Failed to connect to API: ${(error as Error).message}`,
         'connect',
-        'database',
+        'api',
         context
       );
       
-      logger.error('❌ PostgreSQL connection failed', context, appError);
+      logger.error('❌ API connection failed', context, appError);
       errorHandler.handleError(appError, context, {
         showUserNotification: true
       });
@@ -206,14 +164,14 @@ class PostgresPersistentFleetStorage {
   }
 
   /**
-   * Close database connection pool
+   * Cleanup resources
    */
   async disconnect(): Promise<void> {
-    await this.pool.end();
-    logger.info('PostgreSQL connection pool closed');
+    // No database connection to close
+    logger.info('API storage service cleanup completed');
   }
 
-  // Get all vehicles from PostgreSQL
+  // Get all vehicles from API
   async getFleet(): Promise<VehicleRecord[]> {
     const context: LogContext = {
       layer: 'storage',
@@ -222,48 +180,40 @@ class PostgresPersistentFleetStorage {
       metadata: { organizationId: this.getOrganizationId() }
     };
 
-    const operationId = logger.startOperation('Loading fleet data from PostgreSQL', context);
+    const operationId = logger.startOperation('Loading fleet data from API', context);
 
     try {
-      logger.debug('Querying PostgreSQL for fleet data', context);
+      logger.debug('Fetching fleet data from API endpoint', context);
       
-      const query = `
-        SELECT 
-          id, organization_id, vin, make, model, year, license_plate, dot_number,
-          truck_number, status, registration_number, registration_state,
-          registration_expiry as registration_expiration_date, registered_owner,
-          insurance_carrier, policy_number, insurance_expiry as insurance_expiration_date,
-          coverage_amount, compliance_status, last_inspection_date, next_inspection_due,
-          created_at as date_added, updated_at as last_updated
-        FROM vehicles 
-        WHERE organization_id = $1 
-        ORDER BY created_at DESC
-      `;
+      const response = await fetch(`${this.API_BASE_URL}/fleet`);
       
-      const result = await this.pool.query(query, [this.getOrganizationId()]);
-      const rawData = result.rows;
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+      }
       
-      logger.info(`Successfully loaded ${rawData.length} vehicles from PostgreSQL`, context, {
+      const rawData = await response.json();
+      
+      logger.info(`Successfully loaded ${rawData.length} vehicles from API`, context, {
         vehicleCount: rawData.length
       });
       
       // Apply field standardization following Architecture Guide
       const standardizedData = rawData.map((record: any) => this.standardizeVehicleRecord(record));
       
-      logger.completeOperation('Loading fleet data from PostgreSQL', operationId, context, {
+      logger.completeOperation('Loading fleet data from API', operationId, context, {
         loadedCount: standardizedData.length
       });
       
       return standardizedData;
     } catch (error) {
       const appError = errorHandler.createStorageError(
-        `Failed to load fleet data from PostgreSQL: ${(error as Error).message}`,
+        `Failed to load fleet data from API: ${(error as Error).message}`,
         'read',
         'vehicles',
         context
       );
       
-      logger.failOperation('Loading fleet data from PostgreSQL', operationId, appError, context);
+      logger.failOperation('Loading fleet data from API', operationId, appError, context);
       
       errorHandler.handleError(appError, context, {
         showUserNotification: true
@@ -273,7 +223,7 @@ class PostgresPersistentFleetStorage {
     }
   }
 
-  // Save entire fleet to PostgreSQL
+  // Save entire fleet via API
   async saveFleet(vehicles: VehicleRecord[]): Promise<boolean> {
     const context: LogContext = {
       layer: 'storage',
@@ -285,29 +235,29 @@ class PostgresPersistentFleetStorage {
       }
     };
 
-    const operationId = logger.startOperation('Saving fleet data to PostgreSQL', context, {
+    const operationId = logger.startOperation('Saving fleet data via API', context, {
       vehicleCount: vehicles.length
     });
 
-    const client = await this.pool.connect();
     try {
-      await client.query('BEGIN');
+      logger.debug('Sending fleet data to API endpoint', context);
       
-      logger.debug('Clearing existing fleet data', context);
+      const response = await fetch(`${this.API_BASE_URL}/fleet`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(vehicles)
+      });
       
-      // Clear existing vehicles for this organization
-      await client.query('DELETE FROM vehicles WHERE organization_id = $1', [this.getOrganizationId()]);
-      
-      logger.debug('Inserting new fleet data', context);
-      
-      // Insert all vehicles
-      for (const vehicle of vehicles) {
-        await this.insertVehicleRecord(client, vehicle);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(`API request failed: ${response.status} - ${errorData.error || response.statusText}`);
       }
       
-      await client.query('COMMIT');
+      const result = await response.json();
       
-      logger.info(`Successfully saved ${vehicles.length} vehicles to PostgreSQL`, context);
+      logger.info(`Successfully saved ${vehicles.length} vehicles via API`, context);
       
       // Notify all listeners that fleet data has changed
       this.notifyListeners();
@@ -315,34 +265,30 @@ class PostgresPersistentFleetStorage {
       // Emit event bus notification
       FleetEvents.fleetCleared('postgresPersistentFleetStorage');
       
-      logger.completeOperation('Saving fleet data to PostgreSQL', operationId, context, {
+      logger.completeOperation('Saving fleet data via API', operationId, context, {
         savedCount: vehicles.length
       });
       
-      return true;
+      return result.success || true;
     } catch (error) {
-      await client.query('ROLLBACK');
-      
       const appError = errorHandler.createStorageError(
-        `Failed to save fleet data to PostgreSQL: ${(error as Error).message}`,
+        `Failed to save fleet data via API: ${(error as Error).message}`,
         'write',
         'vehicles',
         context
       );
       
-      logger.failOperation('Saving fleet data to PostgreSQL', operationId, appError, context);
+      logger.failOperation('Saving fleet data via API', operationId, appError, context);
       
       errorHandler.handleError(appError, context, {
         showUserNotification: true
       });
       
       return false;
-    } finally {
-      client.release();
     }
   }
 
-  // Add single vehicle to PostgreSQL
+  // Add single vehicle via API
   async addVehicle(vehicle: Omit<VehicleRecord, 'id' | 'dateAdded' | 'lastUpdated'>): Promise<VehicleRecord | null> {
     const context: LogContext = {
       layer: 'storage',
@@ -355,7 +301,7 @@ class PostgresPersistentFleetStorage {
       }
     };
 
-    const operationId = logger.startOperation('Adding vehicle to PostgreSQL', context, {
+    const operationId = logger.startOperation('Adding vehicle via API', context, {
       vin: vehicle.vin,
       make: vehicle.make,
       model: vehicle.model,
@@ -363,31 +309,6 @@ class PostgresPersistentFleetStorage {
     });
 
     try {
-      logger.debug('Checking for duplicate VIN', context);
-      
-      // Check for duplicate VIN
-      const existingCheck = await this.pool.query(
-        'SELECT id FROM vehicles WHERE vin = $1 AND organization_id = $2',
-        [vehicle.vin, this.getOrganizationId()]
-      );
-      
-      if (existingCheck.rows.length > 0) {
-        const validationError = errorHandler.createValidationError(
-          `Vehicle with VIN ${vehicle.vin} already exists`,
-          'vin',
-          vehicle.vin,
-          context
-        );
-        
-        logger.failOperation('Adding vehicle to PostgreSQL', operationId, validationError, context);
-        
-        errorHandler.handleError(validationError, context, {
-          showUserNotification: true
-        });
-        
-        return null;
-      }
-
       // Smart truck number detection
       let truckNumber = vehicle.truckNumber;
       
@@ -415,61 +336,70 @@ class PostgresPersistentFleetStorage {
         });
       }
 
-      const newVehicle: VehicleRecord = {
+      const newVehicle = {
         ...vehicle,
         truckNumber,
-        id: '', // Will be set by database
         organizationId: this.getOrganizationId(),
         dateAdded: new Date().toISOString(),
         lastUpdated: new Date().toISOString()
       };
 
-      logger.debug('Inserting vehicle into PostgreSQL', context, {
+      logger.debug('Sending vehicle to API endpoint', context, {
         truckNumber: newVehicle.truckNumber
       });
 
-      // Insert vehicle using standardized field names
-      const insertQuery = `
-        INSERT INTO vehicles (
-          organization_id, vin, make, model, year, license_plate, dot_number,
-          truck_number, status, registration_number, registration_state,
-          registration_expiry, registered_owner, insurance_carrier, policy_number,
-          insurance_expiry, coverage_amount, compliance_status, last_inspection_date,
-          next_inspection_due
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
-        RETURNING *, created_at as date_added, updated_at as last_updated
-      `;
-      
-      const values = [
-        newVehicle.organizationId, newVehicle.vin, newVehicle.make, newVehicle.model,
-        newVehicle.year, newVehicle.licensePlate, newVehicle.dotNumber, newVehicle.truckNumber,
-        newVehicle.status, newVehicle.registrationNumber, newVehicle.registrationState,
-        newVehicle.registrationExpirationDate, newVehicle.registeredOwner, newVehicle.insuranceCarrier,
-        newVehicle.policyNumber, newVehicle.insuranceExpirationDate, newVehicle.coverageAmount,
-        newVehicle.complianceStatus, newVehicle.lastInspectionDate, newVehicle.nextInspectionDue
-      ];
-
-      const result = await this.pool.query(insertQuery, values);
-      const insertedVehicle = this.standardizeVehicleRecord(result.rows[0]);
-      
-      // Emit event for new vehicle
-      FleetEvents.vehicleAdded(insertedVehicle, 'postgresPersistentFleetStorage');
-      
-      logger.completeOperation('Adding vehicle to PostgreSQL', operationId, context, {
-        vehicleId: insertedVehicle.id,
-        truckNumber: insertedVehicle.truckNumber
+      const response = await fetch(`${this.API_BASE_URL}/vehicles`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(newVehicle)
       });
       
-      return insertedVehicle;
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        
+        if (response.status === 409) {
+          const validationError = errorHandler.createValidationError(
+            errorData.error || `Vehicle with VIN ${vehicle.vin} already exists`,
+            'vin',
+            vehicle.vin,
+            context
+          );
+          
+          logger.failOperation('Adding vehicle via API', operationId, validationError, context);
+          
+          errorHandler.handleError(validationError, context, {
+            showUserNotification: true
+          });
+          
+          return null;
+        }
+        
+        throw new Error(`API request failed: ${response.status} - ${errorData.error || response.statusText}`);
+      }
+      
+      const insertedVehicle = await response.json();
+      const standardizedVehicle = this.standardizeVehicleRecord(insertedVehicle);
+      
+      // Emit event for new vehicle
+      FleetEvents.vehicleAdded(standardizedVehicle, 'postgresPersistentFleetStorage');
+      
+      logger.completeOperation('Adding vehicle via API', operationId, context, {
+        vehicleId: standardizedVehicle.id,
+        truckNumber: standardizedVehicle.truckNumber
+      });
+      
+      return standardizedVehicle;
     } catch (error) {
       const appError = errorHandler.createProcessingError(
-        `Failed to add vehicle to PostgreSQL: ${(error as Error).message}`,
+        `Failed to add vehicle via API: ${(error as Error).message}`,
         'addVehicle',
         vehicle,
         context
       );
       
-      logger.failOperation('Adding vehicle to PostgreSQL', operationId, appError, context);
+      logger.failOperation('Adding vehicle via API', operationId, appError, context);
       
       errorHandler.handleError(appError, context, {
         showUserNotification: true
@@ -479,7 +409,7 @@ class PostgresPersistentFleetStorage {
     }
   }
 
-  // Update existing vehicle in PostgreSQL
+  // Update existing vehicle via API
   async updateVehicle(id: string, updates: Partial<VehicleRecord>): Promise<boolean> {
     const context: LogContext = {
       layer: 'storage',
@@ -491,102 +421,66 @@ class PostgresPersistentFleetStorage {
       }
     };
 
-    const operationId = logger.startOperation('Updating vehicle in PostgreSQL', context, {
+    const operationId = logger.startOperation('Updating vehicle via API', context, {
       vehicleId: id,
       updateFields: Object.keys(updates)
     });
 
     try {
-      logger.debug('Building update query for vehicle', context);
+      logger.debug('Sending vehicle updates to API endpoint', context);
       
-      // Build dynamic UPDATE query with standardized field names
-      const setClause = [];
-      const values = [];
-      let paramCount = 1;
+      const response = await fetch(`${this.API_BASE_URL}/vehicles/${id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(updates)
+      });
       
-      // Map frontend field names to database column names
-      const fieldMappings: Record<string, string> = {
-        'registrationExpirationDate': 'registration_expiry',
-        'insuranceExpirationDate': 'insurance_expiry',
-        'licensePlate': 'license_plate',
-        'dotNumber': 'dot_number',
-        'truckNumber': 'truck_number',
-        'registrationNumber': 'registration_number',
-        'registrationState': 'registration_state',
-        'registeredOwner': 'registered_owner',
-        'insuranceCarrier': 'insurance_carrier',
-        'policyNumber': 'policy_number',
-        'coverageAmount': 'coverage_amount',
-        'complianceStatus': 'compliance_status',
-        'lastInspectionDate': 'last_inspection_date',
-        'nextInspectionDue': 'next_inspection_due'
-      };
-      
-      for (const [key, value] of Object.entries(updates)) {
-        if (key === 'id' || key === 'dateAdded' || key === 'lastUpdated') continue;
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
         
-        const dbColumn = fieldMappings[key] || key;
-        setClause.push(`${dbColumn} = $${paramCount}`);
-        values.push(value);
-        paramCount++;
-      }
-      
-      if (setClause.length === 0) {
-        logger.warn('No valid fields to update', context);
-        return false;
-      }
-      
-      // Add updated_at timestamp
-      setClause.push('updated_at = CURRENT_TIMESTAMP');
-      
-      const updateQuery = `
-        UPDATE vehicles 
-        SET ${setClause.join(', ')} 
-        WHERE id = $${paramCount} AND organization_id = $${paramCount + 1}
-        RETURNING *, created_at as date_added, updated_at as last_updated
-      `;
-      
-      values.push(id, this.getOrganizationId());
-
-      const result = await this.pool.query(updateQuery, values);
-      
-      if (result.rows.length === 0) {
-        const notFoundError = errorHandler.createValidationError(
-          `Vehicle with ID ${id} not found`,
-          'vehicleId',
-          id,
-          context
-        );
+        if (response.status === 404) {
+          const notFoundError = errorHandler.createValidationError(
+            errorData.error || `Vehicle with ID ${id} not found`,
+            'vehicleId',
+            id,
+            context
+          );
+          
+          logger.failOperation('Updating vehicle via API', operationId, notFoundError, context);
+          
+          errorHandler.handleError(notFoundError, context, {
+            showUserNotification: true
+          });
+          
+          return false;
+        }
         
-        logger.failOperation('Updating vehicle in PostgreSQL', operationId, notFoundError, context);
-        
-        errorHandler.handleError(notFoundError, context, {
-          showUserNotification: true
-        });
-        
-        return false;
+        throw new Error(`API request failed: ${response.status} - ${errorData.error || response.statusText}`);
       }
 
-      const updatedVehicle = this.standardizeVehicleRecord(result.rows[0]);
+      const updatedVehicle = await response.json();
+      const standardizedVehicle = this.standardizeVehicleRecord(updatedVehicle);
       
       // Emit event for updated vehicle
-      FleetEvents.vehicleUpdated(updatedVehicle, 'postgresPersistentFleetStorage');
+      FleetEvents.vehicleUpdated(standardizedVehicle, 'postgresPersistentFleetStorage');
       
-      logger.completeOperation('Updating vehicle in PostgreSQL', operationId, context, {
-        vehicleVin: updatedVehicle.vin,
+      logger.completeOperation('Updating vehicle via API', operationId, context, {
+        vehicleVin: standardizedVehicle.vin,
         updatedFields: Object.keys(updates)
       });
       
       return true;
     } catch (error) {
       const appError = errorHandler.createProcessingError(
-        `Failed to update vehicle in PostgreSQL: ${(error as Error).message}`,
+        `Failed to update vehicle via API: ${(error as Error).message}`,
         'updateVehicle',
         { id, updates },
         context
       );
       
-      logger.failOperation('Updating vehicle in PostgreSQL', operationId, appError, context);
+      logger.failOperation('Updating vehicle via API', operationId, appError, context);
       
       errorHandler.handleError(appError, context, {
         showUserNotification: true
@@ -596,89 +490,92 @@ class PostgresPersistentFleetStorage {
     }
   }
 
-  // Remove vehicle from PostgreSQL
+  // Remove vehicle via API
   async removeVehicle(id: string): Promise<boolean> {
     try {
-      const result = await this.pool.query(
-        'DELETE FROM vehicles WHERE id = $1 AND organization_id = $2 RETURNING vin',
-        [id, this.getOrganizationId()]
-      );
+      const response = await fetch(`${this.API_BASE_URL}/vehicles/${id}`, {
+        method: 'DELETE'
+      });
       
-      if (result.rows.length === 0) {
-        throw new Error(`Vehicle with ID ${id} not found`);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        
+        if (response.status === 404) {
+          throw new Error(`Vehicle with ID ${id} not found`);
+        }
+        
+        throw new Error(`API request failed: ${response.status} - ${errorData.error || response.statusText}`);
       }
+      
+      const result = await response.json();
+      
+      // Extract VIN from success message if available
+      const vinMatch = result.message?.match(/VIN ([A-Z0-9]+)/);
+      const vin = vinMatch ? vinMatch[1] : id;
 
       // Emit event for deleted vehicle
-      FleetEvents.vehicleDeleted(result.rows[0].vin, 'postgresPersistentFleetStorage');
+      FleetEvents.vehicleDeleted(vin, 'postgresPersistentFleetStorage');
       
       return true;
     } catch (error) {
-      console.error('Error removing vehicle from PostgreSQL:', error);
+      console.error('Error removing vehicle via API:', error);
       return false;
     }
   }
 
-  // Search vehicles in PostgreSQL
+  // Search vehicles via API
   async searchVehicles(query: string): Promise<VehicleRecord[]> {
     try {
-      const searchQuery = `
-        SELECT *, created_at as date_added, updated_at as last_updated
-        FROM vehicles 
-        WHERE organization_id = $1 
-        AND (
-          LOWER(vin) LIKE LOWER($2) OR
-          LOWER(make) LIKE LOWER($2) OR
-          LOWER(model) LIKE LOWER($2) OR
-          LOWER(license_plate) LIKE LOWER($2) OR
-          LOWER(truck_number) LIKE LOWER($2)
-        )
-        ORDER BY created_at DESC
-      `;
+      const response = await fetch(`${this.API_BASE_URL}/vehicles/search?q=${encodeURIComponent(query)}`);
       
-      const result = await this.pool.query(searchQuery, [
-        this.getOrganizationId(),
-        `%${query}%`
-      ]);
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+      }
       
-      return result.rows.map((record: any) => this.standardizeVehicleRecord(record));
+      const result = await response.json();
+      
+      return result.results.map((record: any) => this.standardizeVehicleRecord(record));
     } catch (error) {
-      console.error('Error searching vehicles in PostgreSQL:', error);
+      console.error('Error searching vehicles via API:', error);
       return [];
     }
   }
 
-  // Get fleet statistics from PostgreSQL
+  // Get fleet statistics via API
   async getFleetStats() {
     try {
-      const statsQuery = `
-        SELECT 
-          COUNT(*) as total,
-          COUNT(CASE WHEN status = 'active' THEN 1 END) as active,
-          COUNT(CASE WHEN status = 'inactive' THEN 1 END) as inactive,
-          COUNT(CASE WHEN created_at > CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as recently_added
-        FROM vehicles 
-        WHERE organization_id = $1
-      `;
+      const response = await fetch(`${this.API_BASE_URL}/fleet/stats`);
       
-      const result = await this.pool.query(statsQuery, [this.getOrganizationId()]);
-      const stats = result.rows[0];
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+      }
+      
+      const stats = await response.json();
       
       return {
-        total: parseInt(stats.total),
-        active: parseInt(stats.active),
-        inactive: parseInt(stats.inactive),
-        recentlyAdded: parseInt(stats.recently_added)
+        total: stats.total || 0,
+        active: stats.active || 0,
+        inactive: stats.inactive || 0,
+        recentlyAdded: stats.recentlyAdded || 0
       };
     } catch (error) {
-      console.error('Error getting fleet stats from PostgreSQL:', error);
+      console.error('Error getting fleet stats via API:', error);
       return { total: 0, active: 0, inactive: 0, recentlyAdded: 0 };
     }
   }
 
-  // Clear all fleet data from PostgreSQL
+  // Clear all fleet data via API
   async clearFleet(): Promise<boolean> {
     try {
-      await this.pool.query('DELETE FROM vehicles WHERE organization_id = $1', [this.getOrganizationId()]);
+      const response = await fetch(`${this.API_BASE_URL}/fleet`, {
+        method: 'DELETE'
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(`API request failed: ${response.status} - ${errorData.error || response.statusText}`);
+      }
+      
       this.notifyListeners();
       
       // Emit event bus notification for fleet clearing
@@ -686,35 +583,12 @@ class PostgresPersistentFleetStorage {
       
       return true;
     } catch (error) {
-      console.error('Error clearing fleet from PostgreSQL:', error);
+      console.error('Error clearing fleet via API:', error);
       return false;
     }
   }
 
-  // Helper method to insert vehicle record with proper field mapping
-  private async insertVehicleRecord(client: PoolClient, vehicle: VehicleRecord): Promise<void> {
-    const insertQuery = `
-      INSERT INTO vehicles (
-        id, organization_id, vin, make, model, year, license_plate, dot_number,
-        truck_number, status, registration_number, registration_state,
-        registration_expiry, registered_owner, insurance_carrier, policy_number,
-        insurance_expiry, coverage_amount, compliance_status, last_inspection_date,
-        next_inspection_due, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
-    `;
-    
-    const values = [
-      vehicle.id || this.generateId(), vehicle.organizationId || this.getOrganizationId(),
-      vehicle.vin, vehicle.make, vehicle.model, vehicle.year, vehicle.licensePlate,
-      vehicle.dotNumber, vehicle.truckNumber, vehicle.status, vehicle.registrationNumber,
-      vehicle.registrationState, vehicle.registrationExpirationDate, vehicle.registeredOwner,
-      vehicle.insuranceCarrier, vehicle.policyNumber, vehicle.insuranceExpirationDate,
-      vehicle.coverageAmount, vehicle.complianceStatus, vehicle.lastInspectionDate,
-      vehicle.nextInspectionDue, vehicle.dateAdded, vehicle.lastUpdated
-    ];
-
-    await client.query(insertQuery, values);
-  }
+  // Helper methods no longer needed with API approach
 
   // Generate sequential truck numbers for fleet management
   private generateTruckNumber(existingFleet: VehicleRecord[]): string {
@@ -820,34 +694,43 @@ class PostgresPersistentFleetStorage {
 
   // Export/Import functionality
   async exportFleet(): Promise<string> {
-    const fleet = await this.getFleet();
-    return JSON.stringify(fleet, null, 2);
+    try {
+      const response = await fetch(`${this.API_BASE_URL}/fleet/export`);
+      
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+      }
+      
+      const result = await response.json();
+      return result.exportData;
+    } catch (error) {
+      console.error('Error exporting fleet via API:', error);
+      // Fallback to getting fleet data directly
+      const fleet = await this.getFleet();
+      return JSON.stringify(fleet, null, 2);
+    }
   }
 
   async importFleet(jsonData: string): Promise<{ success: boolean; message: string; count?: number }> {
     try {
-      const importedVehicles = JSON.parse(jsonData);
+      const response = await fetch(`${this.API_BASE_URL}/fleet/import`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ jsonData })
+      });
       
-      if (!Array.isArray(importedVehicles)) {
-        throw new Error('Invalid data format - expected array of vehicles');
+      const result = await response.json();
+      
+      if (!response.ok) {
+        return {
+          success: false,
+          message: result.message || `Import failed: ${response.status} ${response.statusText}`
+        };
       }
-
-      // Validate each vehicle has required fields
-      const validated = importedVehicles.filter(v => v.vin && v.make && v.model);
       
-      if (validated.length === 0) {
-        throw new Error('No valid vehicles found in import data');
-      }
-
-      const success = await this.saveFleet(validated);
-      
-      return {
-        success,
-        message: success 
-          ? `Successfully imported ${validated.length} vehicles`
-          : 'Failed to import vehicles',
-        count: validated.length
-      };
+      return result;
     } catch (error) {
       return {
         success: false,
@@ -856,26 +739,84 @@ class PostgresPersistentFleetStorage {
     }
   }
 
-  // TODO: Implement driver management methods similar to vehicles
-  // Following the same patterns and field standardization
+  // Get all drivers via API
   async getDrivers(): Promise<DriverRecord[]> {
-    // Implementation placeholder - would follow same pattern as vehicles
-    return [];
+    try {
+      const response = await fetch(`${this.API_BASE_URL}/drivers`);
+      
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+      }
+      
+      const drivers = await response.json();
+      return drivers;
+    } catch (error) {
+      console.error('Error loading drivers via API:', error);
+      return [];
+    }
   }
 
   async addDriver(driver: Omit<DriverRecord, 'id' | 'dateAdded' | 'lastUpdated'>): Promise<DriverRecord | null> {
-    // Implementation placeholder - would follow same pattern as vehicles
-    return null;
+    try {
+      const response = await fetch(`${this.API_BASE_URL}/drivers`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(driver)
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        console.error('Failed to add driver:', errorData.error);
+        return null;
+      }
+      
+      const addedDriver = await response.json();
+      return addedDriver;
+    } catch (error) {
+      console.error('Error adding driver via API:', error);
+      return null;
+    }
   }
 
   async updateDriver(driverId: string, updates: Partial<DriverRecord>): Promise<boolean> {
-    // Implementation placeholder - would follow same pattern as vehicles
-    return false;
+    try {
+      const response = await fetch(`${this.API_BASE_URL}/drivers/${driverId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(updates)
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        console.error('Failed to update driver:', errorData.error);
+        return false;
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Error updating driver via API:', error);
+      return false;
+    }
   }
 
   async getDriversWithExpiringCertificates(daysThreshold: number = 30): Promise<DriverRecord[]> {
-    // Implementation placeholder - would follow same pattern as vehicles
-    return [];
+    try {
+      const response = await fetch(`${this.API_BASE_URL}/drivers/expiring?days=${daysThreshold}`);
+      
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+      }
+      
+      const result = await response.json();
+      return result.drivers || [];
+    } catch (error) {
+      console.error('Error getting drivers with expiring certificates via API:', error);
+      return [];
+    }
   }
 }
 
