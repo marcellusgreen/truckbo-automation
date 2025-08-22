@@ -2,7 +2,7 @@
 // Handles user authentication, company isolation, and session management
 // All authentication logic moved to server-side API endpoints
 
-import { errorHandler } from './errorHandler';
+import { errorHandler } from './errorHandlingService';
 
 export interface User {
   id: string;

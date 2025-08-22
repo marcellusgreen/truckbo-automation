@@ -283,9 +283,9 @@ class CentralizedFleetDataService {
       
       // Load from all sources in parallel for speed
       const [persistentVehicles, reconciledVehicles, dashboardData] = await Promise.all([
-        Promise.resolve(persistentFleetStorage.getFleet()),
-        Promise.resolve(reconcilerAPI.getAllVehicleSummaries()),
-        Promise.resolve(reconcilerAPI.getFleetDashboard())
+        persistentFleetStorage.getFleetAsync(),
+        reconcilerAPI.getAllVehicleSummaries(),
+        reconcilerAPI.getFleetDashboard()
       ]);
 
       // Clear existing data
