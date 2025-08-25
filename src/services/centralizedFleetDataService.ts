@@ -63,11 +63,8 @@ class CentralizedFleetDataService {
     // Subscribe to event bus for automatic sync
     eventBus.subscribe('fleet_data_changed', () => {
       console.log('🔄 CentralizedFleetDataService: Event bus triggered, refreshing data');
-      this.refreshData();
+      this.initializeData();
     });
-    
-    // Initial data load
-    this.refreshData();
   }
 
   /**
@@ -171,7 +168,7 @@ class CentralizedFleetDataService {
       }
 
       // Phase 3: Refresh unified data immediately
-      await this.refreshData();
+      await this.initializeData();
 
       // Emit events
       FleetEvents.documentProcessed({
@@ -267,9 +264,9 @@ class CentralizedFleetDataService {
   }
 
   /**
-   * Refresh data from all sources and unify
+   * Initialize data from all sources and unify
    */
-  async refreshData(): Promise<void> {
+  async initializeData(): Promise<void> {
     if (this.isLoading) {
       console.log('🔄 Already loading data, skipping refresh');
       return;
@@ -480,7 +477,7 @@ export const useFleetData = () => {
     filterVehicles: (status: any) => centralizedFleetDataService.filterVehicles(status),
     addVehicles: (data: ExtractedVehicleData[]) => centralizedFleetDataService.addVehicles(data),
     clearAll: () => centralizedFleetDataService.clearAllFleetData(),
-    refreshData: () => centralizedFleetDataService.refreshData(),
+    initializeData: () => centralizedFleetDataService.initializeData(),
     subscribe: (callback: any) => centralizedFleetDataService.subscribe(callback)
   };
 };

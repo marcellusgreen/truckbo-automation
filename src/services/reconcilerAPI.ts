@@ -104,7 +104,7 @@ class ReconcilerAPI {
       const vehicle = vehicleReconciler.getVehicleSummary(vin);
       if (!vehicle) {
         logger.warn('Vehicle not found in reconciler', context, undefined, { vin });
-        logger.completeOperation('Getting vehicle summary view', operationId, context, { found: false });
+        logger.endOperation('Getting vehicle summary view', operationId, context, { found: false });
         return null;
       }
       
@@ -246,7 +246,7 @@ class ReconcilerAPI {
         hasExpiringSoonDocuments
       };
       
-      logger.completeOperation('Getting vehicle summary view', operationId, context, {
+      logger.endOperation('Getting vehicle summary view', operationId, context, {
         found: true,
         documentCount: summary.totalDocuments,
         complianceScore: summary.complianceScore,
@@ -295,7 +295,7 @@ class ReconcilerAPI {
       const summaries = vehicles.map(vehicle => this.getVehicleSummaryView(vehicle.vin)!)
                               .filter(summary => summary !== null);
       
-      logger.completeOperation('Getting all vehicle summaries', operationId, context, {
+      logger.endOperation('Getting all vehicle summaries', operationId, context, {
         processedCount: vehicles.length,
         successfulCount: summaries.length
       });
@@ -392,7 +392,7 @@ class ReconcilerAPI {
           maxAge: this.CACHE_DURATION
         });
         
-        logger.completeOperation('Getting fleet dashboard', operationId, context, { fromCache: true });
+        logger.endOperation('Getting fleet dashboard', operationId, context, { fromCache: true });
         return this.dashboardCache.data;
       }
 
@@ -517,7 +517,7 @@ class ReconcilerAPI {
         topIssuesCount: dashboard.topIssues.length
       });
       
-      logger.completeOperation('Getting fleet dashboard', operationId, context, {
+      logger.endOperation('Getting fleet dashboard', operationId, context, {
         fromCache: false,
         generatedStats: true
       });
@@ -621,7 +621,7 @@ class ReconcilerAPI {
         // Emit event for document processing
         FleetEvents.documentProcessed(documentData, result.vehicleVIN, 'reconcilerAPI');
         
-        logger.completeOperation('Adding document to reconciliation system', operationId, context, {
+        logger.endOperation('Adding document to reconciliation system', operationId, context, {
           vehicleVIN: result.vehicleVIN,
           conflictCount: result.conflicts?.length || 0,
           warningCount: result.warnings?.length || 0
@@ -638,7 +638,7 @@ class ReconcilerAPI {
           warningCount: result.warnings?.length || 0
         });
         
-        logger.completeOperation('Adding document to reconciliation system', operationId, context, {
+        logger.endOperation('Adding document to reconciliation system', operationId, context, {
           success: false,
           warningCount: result.warnings?.length || 0
         });

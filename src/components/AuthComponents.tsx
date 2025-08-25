@@ -3,6 +3,7 @@
 
 import { useState, useEffect } from 'react';
 import { authService, LoginCredentials, RegisterCompanyData } from '../services/authService';
+import { centralizedFleetDataService } from '../services/centralizedFleetDataService';
 import { ValidatedInput, FormSection, useFormValidation } from './FormValidation';
 import { LoadingSpinner } from './NotificationSystem';
 
@@ -171,6 +172,7 @@ const validatePasswordStrength = (password: string): { isValid: boolean; message
 export function CompanyRegistrationForm({ onRegistrationSuccess, onSwitchToLogin }: CompanyRegistrationFormProps) {
   const [loading, setLoading] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
+  const [showPassword, setShowPassword] = useState(false);
   const totalSteps = 3;
 
   const {
@@ -476,22 +478,39 @@ export function CompanyRegistrationForm({ onRegistrationSuccess, onSwitchToLogin
                   />
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-1">
+                    <div className="space-y-1 relative">
                       <label className="block text-sm font-medium text-gray-700">Password</label>
                       <input
-                        type="password"
+                        type={showPassword ? 'text' : 'password'}
                         value={data.password}
                         onChange={(e) => updateField('password', e.target.value)}
                         placeholder="Min 12 chars, uppercase, lowercase, number, special char"
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                         required
                       />
+                      <button
+                        type="button"
+                        className="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500"
+                        onClick={() => setShowPassword(!showPassword)}
+                      >
+                        {showPassword ? (
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                            <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
+                            <path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.27 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" />
+                          </svg>
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                            <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
+                            <path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.27 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" />
+                          </svg>
+                        )}
+                      </button>
                     </div>
                     
-                    <div className="space-y-1">
+                    <div className="space-y-1 relative">
                       <label className="block text-sm font-medium text-gray-700">Confirm Password</label>
                       <input
-                        type="password"
+                        type={showPassword ? 'text' : 'password'}
                         value={data.confirmPassword}
                         onChange={(e) => updateField('confirmPassword', e.target.value)}
                         placeholder="Confirm your password"
@@ -610,6 +629,12 @@ export function AuthWrapper({ children }: AuthWrapperProps) {
 
     return unsubscribe;
   }, []);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      centralizedFleetDataService.initializeData();
+    }
+  }, [isAuthenticated]);
 
   if (loading) {
     return (
