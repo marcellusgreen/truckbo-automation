@@ -1060,7 +1060,7 @@ const FleetPage: React.FC = () => {
       setIsLoading(true);
       
       // Single call to centralized service - no more multiple sources!
-      await fleetData.refreshData();
+      await fleetData.initializeData();
       const vehicles = fleetData.getVehicles();
       
       setUnifiedVehicles(vehicles);
