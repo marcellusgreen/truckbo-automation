@@ -41,7 +41,7 @@ export default async function handler(req, res) {
 
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const organizationId = decoded.organizationId;
+    const organizationId = decoded.companyId;
 
     const { rows } = await client.query('SELECT * FROM vehicles WHERE organization_id = $1', [organizationId]);
 
