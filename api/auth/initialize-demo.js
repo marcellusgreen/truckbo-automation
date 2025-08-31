@@ -5,6 +5,7 @@
 
 import bcrypt from 'bcrypt';
 import { Pool } from 'pg';
+import { v4 as uuidv4 } from 'uuid';
 
 // Database connection
 const pool = new Pool({
@@ -101,7 +102,7 @@ export default async function handler(req, res) {
 
     const demoUsers = [
       {
-        id: 'user_admin1',
+        id: uuidv4(),
         organization_id: '550e8400-e29b-41d4-a716-446655440000',
         email: 'admin@sunbelttrucking.com',
         password_hash: passwordHash,
@@ -110,7 +111,7 @@ export default async function handler(req, res) {
         role: 'admin'
       },
       {
-        id: 'user_manager1',
+        id: uuidv4(),
         organization_id: '550e8400-e29b-41d4-a716-446655440000',
         email: 'manager@sunbelttrucking.com',
         password_hash: passwordHash,
@@ -119,7 +120,7 @@ export default async function handler(req, res) {
         role: 'manager'
       },
       {
-        id: 'user_admin2',
+        id: uuidv4(),
         organization_id: '550e8400-e29b-41d4-a716-446655440001',
         email: 'admin@lonestarlogistics.com',
         password_hash: passwordHash,
