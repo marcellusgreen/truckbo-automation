@@ -22,8 +22,7 @@
     "test": "npm run api:test",
     "db:setup": "node scripts/setup-database.js",
     "db:migrate": "node scripts/setup-database.js",
-    "db:seed": "node scripts/seed-data.js",
-    "postinstall": "touch src/components/AuthComponents.tsx src/services/persistentFleetStorage.ts"
+    "db:seed": "node scripts/seed-data.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.57.0",
