@@ -1,4 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
+import * as pdfjsLib from 'pdfjs-dist/build/pdf';
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 import { DocumentTriagingService, type TriagingResult } from './documentTriagingService';
 import { FileTypeDetector } from './fileTypeDetector';
 import { serverPDFService } from './serverPDFService';
@@ -140,243 +142,43 @@ class ClaudeVisionProcessor {
         throw new Error('Claude Vision processor not initialized. Check API key.');
       }
 
-      // Step 1: Analyze file for appropriate processing route
-      let triageResult: TriagingResult | null = null;
-      if (file instanceof File) {
-        triageResult = DocumentTriagingService.analyzeFile(file);
-        
-        // Log triaging decision
-        console.log(`📋 Document Triage Result for "${file.name}":`, {
-          tool: triageResult.recommended_tool,
-          type: triageResult.file_type_detected,
-          reasoning: triageResult.reasoning,
-          expectedData: triageResult.expected_compliance_data
-        });
-
-        // Handle unsupported files
-        if (!triageResult.should_process) {
-          return {
-            success: false,
-            error: triageResult.reasoning,
-            processingTime: Date.now() - startTime,
-            triageInfo: triageResult
-          };
-        }
-
-        // Handle files that should go to CLAUDE_CODE instead
-        if (triageResult.recommended_tool === 'CLAUDE_CODE') {
-          return {
-            success: false,
-            error: `${triageResult.file_type_detected} should be processed with structured data parser, not vision AI. ${triageResult.reasoning}`,
-            processingTime: Date.now() - startTime,
-            triageInfo: triageResult
-          };
-        }
-
-        // Handle PDF files that were routed to CLAUDE_TEXT (now deprecated)
-        if (triageResult.recommended_tool === 'CLAUDE_TEXT') {
-          console.log(`⚠️ CLAUDE_TEXT routing is deprecated for ${file.name}. PDFs not supported in browser.`);
-          return {
-            success: false,
-            error: `PDF processing not supported. Please convert "${file.name}" to JPG or PNG format.`,
-            processingTime: Date.now() - startTime,
-            triageInfo: triageResult
-          };
-        }
-
-        // Continue with CLAUDE_VISION processing for visual documents
-        if (triageResult.recommended_tool !== 'CLAUDE_VISION') {
-          return {
-            success: false,
-            error: 'File type not suitable for vision processing',
-            processingTime: Date.now() - startTime,
-            triageInfo: triageResult
-          };
-        }
-      }
-
-      if (!this.anthropic) {
-        throw new Error('Claude API client not initialized.');
-      }
-
-      // Convert file to base64
-      let base64Data: string;
-      let mimeType: string;
-
       if (file.type === 'application/pdf') {
-        // Use server-side processing for PDFs (full Claude Vision PDF support)
-        console.log(`📄 PDF file detected: ${file.name} - routing to server for processing`);
-        
-        try {
-          // Check if server is available
-          const serverAvailable = await serverPDFService.checkServerHealth();
-          
-          if (!serverAvailable) {
-            return {
-              success: false,
-              error: `PDF processing server is not available. "${file.name}" cannot be processed.\n\n📋 Options:\n• Start the PDF processing server (npm run server)\n• Convert PDF to JPG/PNG and upload as image\n• Use server-side deployment for full PDF support`,
-              processingTime: Date.now() - startTime
-            };
-          }
-          
-          // Process PDF on server with Claude Vision
-          const serverResult = await serverPDFService.processPDF(file);
-          
-          if (!serverResult.success) {
-            return {
-              success: false,
-              error: `Server PDF processing failed: ${serverResult.error}`,
-              processingTime: Date.now() - startTime
-            };
-          }
-          
-          // Process server result and add to reconciliation system
-          const extractedData = serverResult.data || {};
-          
-          // Add document to reconciliation system
-          console.log('🔄 Adding PDF document to vehicleReconciler:', {
-            fileName: file?.name || 'unknown_document',
-            extractedVIN: extractedData.vin || 'No VIN found',
-            serverProcessing: true
-          });
-          
-          const reconciliationResult = await vehicleReconciler.addDocument(
-            extractedData, 
-            { 
-              fileName: file?.name || 'unknown_document',
-              source: 'server_pdf_processing',
-              uploadDate: new Date().toISOString()
-            }
-          );
-          
-          console.log('✅ PDF Reconciliation result:', reconciliationResult);
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+        const page = await pdf.getPage(1);
+        const textContent = await page.getTextContent();
 
-          // Sync the successfully added vehicle data to persistentFleetStorage
-          if (reconciliationResult.success && reconciliationResult.vehicleVIN) {
-            console.log('🔄 Syncing reconciler data to persistentFleetStorage for VIN:', reconciliationResult.vehicleVIN);
-            try {
-              const { persistentFleetStorage } = await import('./persistentFleetStorage');
-              
-              // Get the vehicle data from vehicleReconciler
-              const vehicleRecord = vehicleReconciler.getVehicleSummary(reconciliationResult.vehicleVIN);
-              
-              if (vehicleRecord) {
-                // Convert vehicle data from reconciler format to persistentFleetStorage format  
-                const vehicleToSync = {
-                  vin: vehicleRecord.vin || 'UNKNOWN',
-                  make: vehicleRecord.make || 'Unknown',
-                  model: vehicleRecord.model || 'Unknown',
-                  year: vehicleRecord.year || new Date().getFullYear(),
-                  licensePlate: vehicleRecord.licensePlate || 'Unknown', 
-                  truckNumber: vehicleRecord.truckNumber || `Truck-${vehicleRecord.vin?.slice(-4) || 'XXXX'}`,
-                  status: 'active' as const,
-                  
-                  // Registration data from documents
-                  registrationNumber: vehicleRecord.registrationNumber,
-                  registrationState: vehicleRecord.registrationState, 
-                  registrationExpirationDate: vehicleRecord.registrationExpirationDate,
-                  registeredOwner: vehicleRecord.registeredOwner,
-                  
-                  // Insurance data from documents
-                  insuranceCarrier: vehicleRecord.insuranceCarrier,
-                  policyNumber: vehicleRecord.policyNumber,
-                  insuranceExpirationDate: vehicleRecord.insuranceExpirationDate,
-                  coverageAmount: vehicleRecord.coverageAmount,
-                  
-                  // DOT compliance
-                  dotNumber: vehicleRecord.dotNumber,
-                  
-                  // Metadata
-                  dataSource: 'document_processing' as const,
-                  lastUpdated: new Date().toISOString()
-                };
+        if (textContent.items.length > 0) {
+          // Text-based PDF, use server-side processing
+          return await this.processTextBasedPDF(file, options, startTime);
+        } else {
+          // Image-based PDF, convert to image and process
+          const viewport = page.getViewport({ scale: 2 });
+          const canvas = document.createElement('canvas');
+          const context = canvas.getContext('2d');
+          canvas.height = viewport.height;
+          canvas.width = viewport.width;
 
-                // Add vehicle to persistent storage (handle both sync and async)
-                try {
-                  let syncResult;
-                  if (typeof persistentFleetStorage.addVehicle === 'function') {
-                    // Try async first (PostgreSQL), then sync (localStorage)
-                    const result = persistentFleetStorage.addVehicle(vehicleToSync);
-                    if (result && typeof result.then === 'function') {
-                      syncResult = await result;
-                    } else {
-                      syncResult = result;
-                    }
-                  }
-                  
-                  // Also try the async method if available
-                  if (!syncResult && typeof (persistentFleetStorage as any).addVehicleAsync === 'function') {
-                    syncResult = await (persistentFleetStorage as any).addVehicleAsync(vehicleToSync);
-                  }
-                  
-                  console.log('✅ Successfully synced vehicle to persistentFleetStorage:', syncResult);
-                } catch (addVehicleError) {
-                  console.warn('⚠️ Failed to add vehicle to storage:', addVehicleError);
-                  // Try alternative sync method for async storage
-                  try {
-                    if (typeof (persistentFleetStorage as any).getFleetAsync === 'function') {
-                      console.log('🔄 Attempting async fleet sync...');
-                      const currentFleet = await (persistentFleetStorage as any).getFleetAsync();
-                      // Add to current fleet and save
-                      const updatedFleet = [...currentFleet, { ...vehicleToSync, id: `vehicle_${Date.now()}`, dateAdded: new Date().toISOString() }];
-                      if (typeof (persistentFleetStorage as any).saveFleetAsync === 'function') {
-                        await (persistentFleetStorage as any).saveFleetAsync(updatedFleet);
-                        console.log('✅ Vehicle synced via async fleet save');
-                      }
-                    }
-                  } catch (asyncError) {
-                    console.warn('⚠️ Async sync also failed:', asyncError);
-                  }
-                }
-              } else {
-                console.warn('⚠️ Could not retrieve vehicle record from reconciler for VIN:', reconciliationResult.vehicleVIN);
-              }
-              
-            } catch (syncError) {
-              console.warn('⚠️ Could not sync to persistentFleetStorage:', syncError);
-              // Don't fail the whole operation if sync fails
-            }
-          }
+          await page.render({ canvasContext: context, viewport: viewport }).promise;
 
-          // Convert server result to expected format
-          return {
-            success: true,
-            data: serverResult.data,
-            processingTime: serverResult.processingTime,
-            triageInfo: triageResult,
-            reconciliationResult: reconciliationResult
-          };
-          
-        } catch (error) {
-          console.error('Server PDF processing error:', error);
-          return {
-            success: false,
-            error: `PDF processing failed: ${error instanceof Error ? error.message : 'Server error'}. Try converting to JPG/PNG or check server status.`,
-            processingTime: Date.now() - startTime
-          };
+          const base64Data = canvas.toDataURL('image/jpeg');
+          const mimeType = 'image/jpeg';
+
+          return await this.processImageDocument(base64Data.split(',')[1], mimeType, options, startTime);
         }
-        
-      } else if (file.type === 'image/jpeg' || file.type === 'image/png' || file.type === 'image/gif' || file.type === 'image/webp') {
-        // Handle supported image files - Use browser-compatible base64 conversion
-        mimeType = file.type;
+      } else {
+        // Handle other file types (images)
+        const mimeType = file.type;
         const arrayBuffer = await file.arrayBuffer();
         const uint8Array = new Uint8Array(arrayBuffer);
         
-        // Convert to base64 for processing
         let binaryString = '';
         for (let i = 0; i < uint8Array.length; i++) {
           binaryString += String.fromCharCode(uint8Array[i]);
         }
-        base64Data = btoa(binaryString);
+        const base64Data = btoa(binaryString);
         
         return await this.processImageDocument(base64Data, mimeType, options, startTime);
-        
-      } else if (file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || file.type === 'application/vnd.ms-excel') {
-        // Handle Excel files - Claude Vision can't process these directly
-        throw new Error('Excel files cannot be processed with vision AI. Please convert to PDF format first.');
-        
-      } else {
-        throw new Error(`Unsupported file type: ${file.type}. Supported formats: PDF, JPG, PNG, GIF, WEBP.`);
       }
       
     } catch (error) {
@@ -384,6 +186,63 @@ class ClaudeVisionProcessor {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown processing error',
+        processingTime: Date.now() - startTime
+      };
+    }
+  }
+
+  private async processTextBasedPDF(
+    file: File | Blob,
+    options: any,
+    startTime: number
+  ): Promise<ClaudeProcessingResult> {
+    // Use server-side processing for text-based PDFs
+    console.log(`📄 Text-based PDF file detected: ${file.name} - routing to server for processing`);
+    
+    try {
+      const serverAvailable = await serverPDFService.checkServerHealth();
+      
+      if (!serverAvailable) {
+        return {
+          success: false,
+          error: `PDF processing server is not available. "${file.name}" cannot be processed.`,
+          processingTime: Date.now() - startTime
+        };
+      }
+      
+      const serverResult = await serverPDFService.processPDF(file);
+      
+      if (!serverResult.success) {
+        return {
+          success: false,
+          error: `Server PDF processing failed: ${serverResult.error}`,
+          processingTime: Date.now() - startTime
+        };
+      }
+      
+      const extractedData = serverResult.data || {};
+      
+      const reconciliationResult = await vehicleReconciler.addDocument(
+        extractedData, 
+        { 
+          fileName: file?.name || 'unknown_document',
+          source: 'server_pdf_processing',
+          uploadDate: new Date().toISOString()
+        }
+      );
+      
+      return {
+        success: true,
+        data: serverResult.data,
+        processingTime: serverResult.processingTime,
+        reconciliationResult: reconciliationResult
+      };
+      
+    } catch (error) {
+      console.error('Server PDF processing error:', error);
+      return {
+        success: false,
+        error: `PDF processing failed: ${error instanceof Error ? error.message : 'Server error'}`,
         processingTime: Date.now() - startTime
       };
     }
