@@ -16,7 +16,7 @@ const pool = new Pool({
   idleTimeoutMillis: 30000,
 });
 
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = '2h';
 
 /**
