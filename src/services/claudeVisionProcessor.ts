@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import * as pdfjsLib from 'pdfjs-dist/build/pdf';
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 import { DocumentTriagingService, type TriagingResult } from './documentTriagingService';
 import { FileTypeDetector } from './fileTypeDetector';
 import { serverPDFService } from './serverPDFService';
