@@ -1004,6 +1004,123 @@ TRUCK NUMBER: ${truckNum}
     }
   }
 
+  async processDocument(
+    file: File | Blob,
+    options: {
+      maxRetries?: number;
+      timeout?: number;
+      expectedDocumentType?: string;
+    } = {}
+  ): Promise<ClaudeProcessingResult> {
+    const startTime = Date.now();
+    
+    try {
+      if (file.type === 'application/pdf') {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+        const page = await pdf.getPage(1);
+        const textContent = await page.getTextContent();
+
+        if (textContent.items.length > 0) {
+          // Text-based PDF, use server-side processing
+          return await this.processTextBasedPDF(file, options, startTime);
+        } else {
+          // Image-based PDF, convert to image and process
+          const viewport = page.getViewport({ scale: 2 });
+          const canvas = document.createElement('canvas');
+          const context = canvas.getContext('2d');
+          canvas.height = viewport.height;
+          canvas.width = viewport.width;
+
+          await page.render({ canvasContext: context, viewport: viewport }).promise;
+
+          const base64Data = canvas.toDataURL('image/jpeg');
+          const mimeType = 'image/jpeg';
+
+          return await this.processImageDocument(base64Data.split(',')[1], mimeType, options, startTime);
+        }
+      } else {
+        // Handle other file types (images)
+        const mimeType = file.type;
+        const arrayBuffer = await file.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+        
+        let binaryString = '';
+        for (let i = 0; i < uint8Array.length; i++) {
+          binaryString += String.fromCharCode(uint8Array[i]);
+        }
+        const base64Data = btoa(binaryString);
+        
+        return await this.processImageDocument(base64Data, mimeType, options, startTime);
+      }
+      
+    } catch (error) {
+      console.error('Claude Vision processing error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown processing error',
+        processingTime: Date.now() - startTime
+      };
+    }
+  }
+
+  private async processTextBasedPDF(
+    file: File | Blob,
+    options: any,
+    startTime: number
+  ): Promise<ClaudeProcessingResult> {
+    // Use server-side processing for text-based PDFs
+    console.log(`📄 Text-based PDF file detected: ${file.name} - routing to server for processing`);
+    
+    try {
+      const serverAvailable = await serverPDFService.checkServerHealth();
+      
+      if (!serverAvailable) {
+        return {
+          success: false,
+          error: `PDF processing server is not available. "${file.name}" cannot be processed.`,
+          processingTime: Date.now() - startTime
+        };
+      }
+      
+      const serverResult = await serverPDFService.processPDF(file);
+      
+      if (!serverResult.success) {
+        return {
+          success: false,
+          error: `Server PDF processing failed: ${serverResult.error}`,
+          processingTime: Date.now() - startTime
+        };
+      }
+      
+      const extractedData = serverResult.data || {};
+      
+      const reconciliationResult = await vehicleReconciler.addDocument(
+        extractedData, 
+        { 
+          fileName: file?.name || 'unknown_document',
+          source: 'server_pdf_processing',
+          uploadDate: new Date().toISOString()
+        }
+      );
+      
+      return {
+        success: true,
+        data: serverResult.data,
+        processingTime: serverResult.processingTime,
+        reconciliationResult: reconciliationResult
+      };
+      
+    } catch (error) {
+      console.error('Server PDF processing error:', error);
+      return {
+        success: false,
+        error: `PDF processing failed: ${error instanceof Error ? error.message : 'Server error'}`,
+        processingTime: Date.now() - startTime
+      };
+    }
+  }
+
   /**
    * Generate realistic PDF content for testing
    */
@@ -1061,6 +1178,58 @@ Fleet Vehicle: ${truckNum}
     }
   }
   
+  private async processImageDocument(
+    base64Data: string,
+    mimeType: string,
+    options: any,
+    startTime: number
+  ): Promise<ClaudeProcessingResult> {
+    
+    const prompt = OptimizedClaudePrompts.buildImageExtractionPrompt(options.expectedDocumentType);
+    
+    try {
+      const response = await claudeVisionProcessor.anthropic!.messages.create({
+        model: "claude-3-5-sonnet-20241022",
+        max_tokens: 2000,
+        messages: [{
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: mimeType as any,
+                data: base64Data,
+              },
+            },
+            {
+              type: "text",
+              text: prompt
+            }
+          ],
+        }],
+      });
+
+      // Parse Claude's optimized response
+      const responseText = response.content[0]?.type === 'text' ? response.content[0].text : '';
+      const extractedData = await this.parseOptimizedClaudeResponse(responseText);
+
+      return {
+        success: true,
+        data: extractedData,
+        processingTime: Date.now() - startTime
+      };
+
+    } catch (error) {
+      console.error('Claude API error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Claude API error',
+        processingTime: Date.now() - startTime
+      };
+    }
+  }
+
   /**
    * Read file as text
    */
