@@ -2,6 +2,7 @@
 // Processes bulk uploaded registration and insurance documents
 
 import { truckNumberParser } from './truckNumberParser';
+import { serverPDFService } from './serverPDFService';
 import { createWorker, Worker } from 'tesseract.js';
 import { errorHandler, withErrorHandling } from './errorHandler';
 // import { logger, logOperation } from './logger'; // Temporarily disabled for build
@@ -12,7 +13,7 @@ const logOperation = {
 };
 import { processingTracker } from '../components/ProcessingModal';
 import { dataValidator } from './dataValidation';
-import { claudeVisionProcessor, type ClaudeProcessingResult } from './claudeVisionProcessor';
+import { googleVisionProcessor, type GoogleVisionProcessingResult } from './googleVisionProcessor';
 import { documentRouter } from './documentRouter';
 // import { vehicleReconciliation, type ExtractedDocument, type ConsolidatedVehicle } from './vehicleReconciliation'; // Temporarily disabled for build
 const vehicleReconciliation = {
@@ -951,67 +952,7 @@ TRUCK NUMBER: ${truckNum}
       timeout?: number;
       expectedDocumentType?: string;
     } = {}
-  ): Promise<ClaudeProcessingResult> {
-    const startTime = Date.now();
-    
-    try {
-      if (file.type === 'application/pdf') {
-        const arrayBuffer = await file.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
-        const page = await pdf.getPage(1);
-        const textContent = await page.getTextContent();
-
-        if (textContent.items.length > 0) {
-          // Text-based PDF, use server-side processing
-          return await this.processTextBasedPDF(file, options, startTime);
-        } else {
-          // Image-based PDF, convert to image and process
-          const viewport = page.getViewport({ scale: 2 });
-          const canvas = document.createElement('canvas');
-          const context = canvas.getContext('2d');
-          canvas.height = viewport.height;
-          canvas.width = viewport.width;
-
-          await page.render({ canvasContext: context, viewport: viewport }).promise;
-
-          const base64Data = canvas.toDataURL('image/jpeg');
-          const mimeType = 'image/jpeg';
-
-          return await this.processImageDocument(base64Data.split(',')[1], mimeType, options, startTime);
-        }
-      } else {
-        // Handle other file types (images)
-        const mimeType = file.type;
-        const arrayBuffer = await file.arrayBuffer();
-        const uint8Array = new Uint8Array(arrayBuffer);
-        
-        let binaryString = '';
-        for (let i = 0; i < uint8Array.length; i++) {
-          binaryString += String.fromCharCode(uint8Array[i]);
-        }
-        const base64Data = btoa(binaryString);
-        
-        return await this.processImageDocument(base64Data, mimeType, options, startTime);
-      }
-      
-    } catch (error) {
-      console.error('Claude Vision processing error:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown processing error',
-        processingTime: Date.now() - startTime
-      };
-    }
-  }
-
-  async processDocument(
-    file: File | Blob,
-    options: {
-      maxRetries?: number;
-      timeout?: number;
-      expectedDocumentType?: string;
-    } = {}
-  ): Promise<ClaudeProcessingResult> {
+  ): Promise<GoogleVisionProcessingResult> {
     const startTime = Date.now();
     
     try {
@@ -1068,7 +1009,7 @@ TRUCK NUMBER: ${truckNum}
     file: File | Blob,
     options: any,
     startTime: number
-  ): Promise<ClaudeProcessingResult> {
+  ): Promise<GoogleVisionProcessingResult> {
     // Use server-side processing for text-based PDFs
     console.log(`📄 Text-based PDF file detected: ${file.name} - routing to server for processing`);
     
@@ -1183,49 +1124,36 @@ Fleet Vehicle: ${truckNum}
     mimeType: string,
     options: any,
     startTime: number
-  ): Promise<ClaudeProcessingResult> {
-    
-    const prompt = OptimizedClaudePrompts.buildImageExtractionPrompt(options.expectedDocumentType);
-    
+  ): Promise<GoogleVisionProcessingResult> {
     try {
-      const response = await claudeVisionProcessor.anthropic!.messages.create({
-        model: "claude-3-5-sonnet-20241022",
-        max_tokens: 2000,
-        messages: [{
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: mimeType as any,
-                data: base64Data,
-              },
-            },
-            {
-              type: "text",
-              text: prompt
-            }
-          ],
-        }],
-      });
-
-      // Parse Claude's optimized response
-      const responseText = response.content[0]?.type === 'text' ? response.content[0].text : '';
-      const extractedData = await this.parseOptimizedClaudeResponse(responseText);
-
-      return {
-        success: true,
-        data: extractedData,
-        processingTime: Date.now() - startTime
-      };
+      // Create a file-like object from base64 data for Google Vision
+      const binaryString = atob(base64Data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      const file = new File([bytes], 'document', { type: mimeType });
+      
+      // Process with Google Vision
+      const result = await googleVisionProcessor.processDocument(file);
+      
+      if (result.success && result.text) {
+        return {
+          success: true,
+          text: result.text
+        };
+      } else {
+        return {
+          success: false,
+          error: result.error || 'Google Vision processing failed'
+        };
+      }
 
     } catch (error) {
-      console.error('Claude API error:', error);
+      console.error('Google Vision API error:', error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Claude API error',
-        processingTime: Date.now() - startTime
+        error: error instanceof Error ? error.message : 'Google Vision API error'
       };
     }
   }
@@ -2843,7 +2771,7 @@ Fleet Vehicle: ${truckNum}
         vehiclesFound: vehicleData?.length || 0,
         driversFound: driverData?.length || 0,
         processingTime: Date.now() - startTime,
-        claudeStats: claudeVisionProcessor.getProcessingStats(safeClaudeResults),
+        googleVisionStats: { processed: safeClaudeResults.length },
         averageConfidence: successfulWithData.length > 0 
           ? successfulWithData.reduce((sum, r) => sum + (r.data?.confidence || 0), 0) / successfulWithData.length
           : 0,

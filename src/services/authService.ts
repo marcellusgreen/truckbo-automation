@@ -2,7 +2,8 @@
 // Handles user authentication, company isolation, and session management
 // All authentication logic moved to server-side API endpoints
 
-import { errorHandler } from './errorHandlingService';
+import { ErrorHandlerService } from './errorHandlingService';
+import { createApiUrl, API_CONFIG } from '../utils/apiConfig';
 
 export interface User {
   id: string;
@@ -102,6 +103,7 @@ interface LoginAttemptRecord {
 }
 
 class AuthenticationService {
+  private readonly errorHandler = new ErrorHandlerService();
   private readonly SESSION_KEY = 'truckbo_session';
   private readonly COMPANIES_KEY = 'truckbo_companies';
   private readonly USERS_KEY = 'truckbo_users';
@@ -120,7 +122,7 @@ class AuthenticationService {
    */
   async initializeDemo(): Promise<void> {
     try {
-      const response = await fetch('/api/auth/initialize-demo', {
+      const response = await fetch(createApiUrl(API_CONFIG.endpoints.auth.initializeDemo), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -137,7 +139,7 @@ class AuthenticationService {
       
     } catch (error) {
       console.error('Failed to initialize demo data:', error);
-      errorHandler.handleUserError(
+      this.errorHandler.handleUserError(
         'Failed to initialize demo data',
         'Please check your server connection and try again'
       );
@@ -149,7 +151,7 @@ class AuthenticationService {
    */
   async login(credentials: LoginCredentials): Promise<AuthSession> {
     try {
-      const response = await fetch('/api/auth/login', {
+      const response = await fetch(createApiUrl(API_CONFIG.endpoints.auth.login), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -180,13 +182,13 @@ class AuthenticationService {
       this.saveSession(session);
       this.notifySessionListeners();
 
-      errorHandler.showSuccess(`Welcome back, ${data.user.firstName}!`);
+      this.errorHandler.showSuccess(`Welcome back, ${data.user.firstName}!`);
       console.log(`🔐 User logged in: ${data.user.email} (${data.company.name})`);
 
       return session;
 
     } catch (error) {
-      errorHandler.handleUserError(
+      this.errorHandler.handleUserError(
         error instanceof Error ? error.message : 'Login failed',
         'Please check your credentials and try again'
       );
@@ -205,7 +207,7 @@ class AuthenticationService {
         throw new Error(passwordValidation.message);
       }
 
-      const response = await fetch('/api/auth/register', {
+      const response = await fetch(createApiUrl(API_CONFIG.endpoints.auth.register), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -232,13 +234,13 @@ class AuthenticationService {
       this.saveSession(session);
       this.notifySessionListeners();
 
-      errorHandler.showSuccess(`Welcome to TruckBo Pro, ${responseData.user.firstName}! Your company has been registered.`);
+      this.errorHandler.showSuccess(`Welcome to TruckBo Pro, ${responseData.user.firstName}! Your company has been registered.`);
       console.log(`🏢 New company registered: ${responseData.company.name}`);
 
       return session;
 
     } catch (error) {
-      errorHandler.handleUserError(
+      this.errorHandler.handleUserError(
         error instanceof Error ? error.message : 'Registration failed',
         'Please check your information and try again'
       );
@@ -252,7 +254,7 @@ class AuthenticationService {
   logout(): void {
     if (this.currentSession) {
       console.log(`🔐 User logged out: ${this.currentSession.user.email}`);
-      errorHandler.showInfo(`Goodbye, ${this.currentSession.user.firstName}!`);
+      this.errorHandler.showInfo(`Goodbye, ${this.currentSession.user.firstName}!`);
     }
 
     this.currentSession = null;

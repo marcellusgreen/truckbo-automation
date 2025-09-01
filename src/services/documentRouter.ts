@@ -5,26 +5,25 @@
 
 import { FileTypeDetector, type FileAnalysis, type ProcessorType } from './fileTypeDetector';
 import { ExcelProcessor } from './excelProcessor';
-import ClaudeVisionProcessor from './claudeVisionProcessor';
-import type { ClaudeProcessingResult } from './claudeVisionProcessor';
+import { googleVisionProcessor, type GoogleVisionProcessingResult } from './googleVisionProcessor';
 
 export interface RoutingResult {
   success: boolean;
   fileName: string;
   processor: ProcessorType;
   analysis: FileAnalysis;
-  result?: ClaudeProcessingResult;
+  result?: GoogleVisionProcessingResult;
   error?: string;
   processingTime: number;
 }
 
 export class DocumentRouter {
   private excelProcessor: ExcelProcessor;
-  private visionProcessor: ClaudeVisionProcessor;
+  private visionProcessor: any;
 
   constructor() {
     this.excelProcessor = new ExcelProcessor();
-    this.visionProcessor = new ClaudeVisionProcessor();
+    this.visionProcessor = googleVisionProcessor;
   }
 
   /**

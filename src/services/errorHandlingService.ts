@@ -50,7 +50,7 @@ export interface ErrorNotification {
   }>;
 }
 
-class ErrorHandlerService {
+export class ErrorHandlerService {
   private notificationCallbacks: Array<(notification: ErrorNotification) => void> = [];
   private errorCounts = new Map<string, number>();
   private recentErrors = new Set<string>();
