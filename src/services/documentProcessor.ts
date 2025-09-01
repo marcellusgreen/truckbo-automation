@@ -13,13 +13,7 @@ const logOperation = {
 import { processingTracker } from '../components/ProcessingModal';
 import { dataValidator } from './dataValidation';
 import { claudeVisionProcessor, type ClaudeProcessingResult } from './claudeVisionProcessor';
-// import { documentRouter } from './documentRouter'; // Temporarily disabled for build
-const documentRouter = {
-  processFiles: async (files: any[], callback?: Function) => {
-    console.log('documentRouter.processFiles called with', files.length, 'files');
-    return files.map(file => ({ success: true, fileName: file.name, result: null }));
-  }
-};
+import { documentRouter } from './documentRouter';
 // import { vehicleReconciliation, type ExtractedDocument, type ConsolidatedVehicle } from './vehicleReconciliation'; // Temporarily disabled for build
 const vehicleReconciliation = {
   reconcileDocuments: (documents: any[]) => {
@@ -442,6 +436,38 @@ export class DocumentProcessor {
     return result;
   }
   
+  async processDocuments(files: FileList, progressCallback: (progress: number, message: string) => void): Promise<ProcessingResult> {
+    const results: ClaudeProcessingResult[] = [];
+    
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const progress = ((i + 1) / files.length) * 100;
+      progressCallback(progress, `Processing ${file.name}...`);
+
+      const result = await this.processDocument(file);
+      results.push(result);
+    }
+
+    const vehicleData = results.filter(r => r.success && r.data?.documentType !== 'medical_certificate' && r.data?.documentType !== 'cdl_license').map(r => r.data) as ExtractedVehicleData[];
+    const driverData = results.filter(r => r.success && (r.data?.documentType === 'medical_certificate' || r.data?.documentType === 'cdl_license')).map(r => r.data) as ExtractedDriverData[];
+
+    return {
+      vehicleData,
+      driverData,
+      unprocessedFiles: results.filter(r => !r.success).map(r => r.error || 'Unknown error'),
+      errors: results.filter(r => !r.success).map(r => ({ fileName: 'unknown', error: r.error || 'Unknown error' })),
+      summary: {
+        totalFiles: files.length,
+        processed: results.filter(r => r.success).length,
+        registrationDocs: results.filter(r => r.data?.documentType === 'registration').length,
+        insuranceDocs: results.filter(r => r.data?.documentType === 'insurance').length,
+        medicalCertificates: results.filter(r => r.data?.documentType === 'medical_certificate').length,
+        cdlDocuments: results.filter(r => r.data?.documentType === 'cdl_license').length,
+        duplicatesFound: 0
+      }
+    };
+  }
+
   /**
    * Classify documents by type using filename patterns and basic analysis
    */
@@ -915,6 +941,66 @@ TRUCK NUMBER: ${truckNum}
       
       console.log(`🔄 Falling back to mock PDF data for ${file.name}`);
       return this.generateRealisticPDFText(file.name);
+    }
+  }
+
+  async processDocument(
+    file: File | Blob,
+    options: {
+      maxRetries?: number;
+      timeout?: number;
+      expectedDocumentType?: string;
+    } = {}
+  ): Promise<ClaudeProcessingResult> {
+    const startTime = Date.now();
+    
+    try {
+      if (file.type === 'application/pdf') {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+        const page = await pdf.getPage(1);
+        const textContent = await page.getTextContent();
+
+        if (textContent.items.length > 0) {
+          // Text-based PDF, use server-side processing
+          return await this.processTextBasedPDF(file, options, startTime);
+        } else {
+          // Image-based PDF, convert to image and process
+          const viewport = page.getViewport({ scale: 2 });
+          const canvas = document.createElement('canvas');
+          const context = canvas.getContext('2d');
+          canvas.height = viewport.height;
+          canvas.width = viewport.width;
+
+          await page.render({ canvasContext: context, viewport: viewport }).promise;
+
+          const base64Data = canvas.toDataURL('image/jpeg');
+          const mimeType = 'image/jpeg';
+
+          return await this.processImageDocument(base64Data.split(',')[1], mimeType, options, startTime);
+        }
+      } else {
+        // Handle other file types (images)
+        const mimeType = file.type;
+        const arrayBuffer = await file.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+        
+        let binaryString = '';
+        for (let i = 0; i < uint8Array.length; i++) {
+          binaryString += String.fromCharCode(uint8Array[i]);
+        }
+        const base64Data = btoa(binaryString);
+        
+        return await this.processImageDocument(base64Data, mimeType, options, startTime);
+      }
+      
+    } catch (error) {
+      console.error('Claude Vision processing error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown processing error',
+        processingTime: Date.now() - startTime
+      };
     }
   }
 

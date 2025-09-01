@@ -74,50 +74,13 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
 
       console.log(`🚀 Starting Claude Vision processing for ${selectedFiles.length} files`);
       
-      // Use the enhanced Claude Vision processing with smart merging
-      const claudeResult = await documentProcessor.processDocumentsWithClaude(
+      const result = await documentProcessor.processDocuments(
         selectedFiles,
         (progress, message) => {
           setProcessingProgress(Math.min(progress, 90));
           console.log(`📈 Progress: ${progress}% - ${message}`);
         }
       );
-      
-      // Convert to the expected ProcessingResult format for compatibility
-      console.log('🔍 MODAL RESULT CONVERSION DEBUG:');
-      console.log('claudeResult:', claudeResult);
-      console.log('claudeResult.vehicleData:', claudeResult?.vehicleData);
-      console.log('claudeResult.consolidatedVehicles:', claudeResult?.consolidatedVehicles);
-      console.log('claudeResult.claudeResults:', claudeResult?.claudeResults);
-      console.log('selectedFiles:', selectedFiles);
-      console.log('selectedFiles.length:', selectedFiles?.length);
-      
-      // Ensure safe access to all arrays
-      const safeVehicleData = Array.isArray(claudeResult?.vehicleData) ? claudeResult.vehicleData : [];
-      const safeDriverData = Array.isArray(claudeResult?.driverData) ? claudeResult.driverData : [];
-      const safeClaudeResults = Array.isArray(claudeResult?.claudeResults) ? claudeResult.claudeResults : [];
-      const safeSelectedFiles = selectedFiles || { length: 0 };
-      
-      const result: ProcessingResult = {
-        vehicleData: safeVehicleData,
-        driverData: safeDriverData,
-        consolidatedVehicles: claudeResult?.consolidatedVehicles || [], // Add the missing consolidated vehicles!
-        unprocessedFiles: safeClaudeResults
-          .filter(r => r && !r.success)
-          .map((r, index) => `File ${index + 1}`),
-        errors: safeClaudeResults
-          .filter(r => r && !r.success)
-          .map((r, index) => ({ fileName: `File ${index + 1}`, error: r?.error || 'Unknown error' })),
-        summary: {
-          totalFiles: safeSelectedFiles.length || 0,
-          processed: claudeResult?.processingStats?.processedFiles || 0,
-          registrationDocs: claudeResult?.processingStats?.claudeStats?.documentTypes?.registration || 0,
-          insuranceDocs: claudeResult?.processingStats?.claudeStats?.documentTypes?.insurance || 0,
-          medicalCertificates: claudeResult?.processingStats?.claudeStats?.documentTypes?.medical_certificate || 0,
-          cdlDocuments: claudeResult?.processingStats?.claudeStats?.documentTypes?.cdl_license || 0,
-          duplicatesFound: Math.max(0, (safeSelectedFiles.length || 0) - safeVehicleData.length)
-        }
-      };
       
       clearInterval(progressInterval);
       setProcessingProgress(100);
