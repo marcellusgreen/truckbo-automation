@@ -47,6 +47,15 @@ function getAllPermissions() {
   ];
 }
 
+function getSubscriptionLimits(plan) {
+  const limits = {
+    basic: { maxVehicles: 10, maxDrivers: 20, maxUsers: 3 },
+    professional: { maxVehicles: 50, maxDrivers: 100, maxUsers: 10 },
+    enterprise: { maxVehicles: 500, maxDrivers: 1000, maxUsers: 50 }
+  };
+  return limits[plan] || limits.basic;
+}
+
 app.post('/auth/initialize-demo', async (req, res) => {
   const client = await pool.connect();
   
