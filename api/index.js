@@ -460,6 +460,7 @@ app.get('/fleet', async (req, res) => {
   }
 });
 
-// For Vercel serverless functions
-module.exports = app;
-module.exports.default = app;
+// Export for Vercel serverless functions
+module.exports = (req, res) => {
+  return app(req, res);
+};
