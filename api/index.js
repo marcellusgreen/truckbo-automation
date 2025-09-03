@@ -11,12 +11,24 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-});
+// Gracefully handle missing environment variables
+let pool;
+try {
+  if (process.env.DATABASE_URL) {
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+    });
+  } else {
+    console.warn('DATABASE_URL not set - database operations will fail');
+    pool = null;
+  }
+} catch (error) {
+  console.error('Failed to initialize database pool:', error);
+  pool = null;
+}
 
-const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-for-development';
 const JWT_EXPIRES_IN = '2h';
 
 function generateJWT(user, company) {
@@ -56,7 +68,24 @@ function getSubscriptionLimits(plan) {
   return limits[plan] || limits.basic;
 }
 
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'OK',
+    message: 'API is running',
+    database: pool ? 'connected' : 'not connected',
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
+
 app.post('/auth/initialize-demo', async (req, res) => {
+  if (!pool) {
+    return res.status(500).json({
+      success: false,
+      message: 'Database not available'
+    });
+  }
+
   const client = await pool.connect();
   
   try {
