@@ -139,7 +139,7 @@ class AuthenticationService {
       
     } catch (error) {
       console.error('Failed to initialize demo data:', error);
-      this.errorHandler.handleUserError(
+      this.errorHandler.handleError(
         'Failed to initialize demo data',
         'Please check your server connection and try again'
       );
@@ -188,7 +188,7 @@ class AuthenticationService {
       return session;
 
     } catch (error) {
-      this.errorHandler.handleUserError(
+      this.errorHandler.handleError(
         error instanceof Error ? error.message : 'Login failed',
         'Please check your credentials and try again'
       );
@@ -240,7 +240,7 @@ class AuthenticationService {
       return session;
 
     } catch (error) {
-      this.errorHandler.handleUserError(
+      this.errorHandler.handleError(
         error instanceof Error ? error.message : 'Registration failed',
         'Please check your information and try again'
       );
