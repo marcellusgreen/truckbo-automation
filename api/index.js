@@ -1,11 +1,10 @@
-import express from 'express';
-import cors from 'cors';
-import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
-import pg from 'pg';
-const { Pool } = pg;
-import { v4 as uuidv4 } from 'uuid';
-import crypto from 'crypto';
+const express = require('express');
+const cors = require('cors');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const { Pool } = require('pg');
+const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 
 const app = express();
 
@@ -471,4 +470,4 @@ app.get('/fleet', async (req, res) => {
 });
 
 // Export for Vercel serverless functions
-export default app;
+module.exports = app;
