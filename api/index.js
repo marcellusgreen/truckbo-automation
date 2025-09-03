@@ -9,8 +9,20 @@ import crypto from 'crypto';
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());
+try {
+  app.use(cors());
+  app.use(express.json());
+
+app.use((req, res, next) => {
+  console.log(`Received request: ${req.method} ${req.url}`);
+  res.on('finish', () => {
+    console.log(`Sent response: ${res.statusCode}`);
+  });
+  next();
+});
+} catch (error) {
+  console.error('Error during app initialization:', error);
+}
 
 // Gracefully handle missing environment variables
 let pool;
@@ -500,4 +512,9 @@ app.get('/fleet', async (req, res) => {
 });
 
 // Export for Vercel serverless functions
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ success: false, message: 'Internal server error' });
+});
+
 export default app;
