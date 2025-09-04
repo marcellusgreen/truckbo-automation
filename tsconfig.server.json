@@ -4,6 +4,8 @@
     "outDir": "./dist",
     "noEmit": false,
     "module": "CommonJS",
+    "moduleResolution": "node",
+    "allowImportingTsExtensions": false,
     "rootDir": "."
   },
   "include": ["server/**/*.ts", "src/services/**/*.ts"]
