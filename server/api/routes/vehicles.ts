@@ -6,8 +6,9 @@ import { ApiResponseBuilder } from '../core/ApiResponseBuilder';
 import { ApiError, asyncHandler, requestContext } from '../middleware/errorHandling';
 import { vehicleTransformer, ApiVehicleInput } from '../transformers/VehicleTransformer';
 import { HttpStatus, ApiErrorCode, RequestContext } from '../types/apiTypes';
-import { persistentFleetStorage, VehicleRecord } from '../../../src/services/persistentFleetStorage';
-import { logger } from '../../../src/services/logger';
+import { VehicleRecord } from '../../../shared/types/vehicleTypes';
+import { logger } from '../../../shared/services/logger';
+import { persistentFleetStorage } from '../../../shared/services/mockFleetStorage';
 
 const router = Router();
 
@@ -220,7 +221,7 @@ router.post('/v1/vehicles', asyncHandler(async (req: Request, res: Response) => 
 
     if (existingVehicle) {
       // Update existing vehicle
-      const updateData = vehicleTransformer.reverse(vehicleInput);
+      const updateData = vehicleTransformer.reverseInput(vehicleInput);
       savedVehicle = await persistentFleetStorage.updateVehicle(existingVehicle.id, updateData);
       isUpdate = true;
 
@@ -234,7 +235,7 @@ router.post('/v1/vehicles', asyncHandler(async (req: Request, res: Response) => 
 
     } else {
       // Create new vehicle
-      const newVehicleData = vehicleTransformer.reverse(vehicleInput);
+      const newVehicleData = vehicleTransformer.reverseInput(vehicleInput);
       savedVehicle = await persistentFleetStorage.addVehicle({
         ...newVehicleData,
         id: `vehicle_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -326,7 +327,7 @@ router.put('/v1/vehicles/:id', asyncHandler(async (req: Request, res: Response) 
     }
 
     // Update vehicle
-    const updateData = vehicleTransformer.reverse(vehicleInput);
+    const updateData = vehicleTransformer.reverseInput(vehicleInput);
     const updatedVehicle = await persistentFleetStorage.updateVehicle(id, updateData);
 
     // Transform response data

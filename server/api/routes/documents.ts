@@ -5,9 +5,9 @@ import { Router, Request, Response } from 'express';
 import { ApiResponseBuilder } from '../core/ApiResponseBuilder';
 import { ApiError, asyncHandler, requestContext } from '../middleware/errorHandling';
 import { HttpStatus, ApiErrorCode, RequestContext } from '../types/apiTypes';
-import { logger } from '../../../src/services/logger';
-import { apiManager } from '../../../src/services/apiManager';
-import { claudeVisionProcessor } from '../../../src/services/claudeVisionProcessor';
+import { logger } from '../../../shared/services/logger';
+import { apiManager } from '../../../shared/services/apiManager';
+import { googleVisionProcessor } from '../../../shared/services/googleVisionProcessor';
 import multer from 'multer';
 import path from 'path';
 
@@ -155,11 +155,11 @@ router.post('/v1/documents/process',
       const results: DocumentProcessingResult[] = [];
       const warnings: string[] = [];
 
-      // Process each document using Claude Vision
+      // Process each document using Google Vision
       for (const file of files) {
+        const fileProcessingStart = Date.now();
         try {
           const documentId = `doc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-          const fileProcessingStart = Date.now();
 
           // Validate file size
           if (file.size > 50 * 1024 * 1024) {
@@ -169,7 +169,7 @@ router.post('/v1/documents/process',
             );
           }
 
-          logger.info(`Starting Claude Vision processing for ${file.originalname}`, {
+          logger.info(`Starting Google Vision processing for ${file.originalname}`, {
             layer: 'api',
             component: 'DocumentsController',
             operation: 'processDocument',
@@ -182,22 +182,23 @@ router.post('/v1/documents/process',
             mimeType: file.mimetype
           });
 
-          // Convert Express.Multer.File to File for Claude Vision processor
-          const fileBlob = new File([file.buffer], file.originalname, { 
+          // Convert Express.Multer.File to File for Google Vision processor  
+          // Convert Buffer to Uint8Array to ensure compatibility
+          const fileBlob = new File([new Uint8Array(file.buffer)], file.originalname, { 
             type: file.mimetype 
           });
 
-          // Process document with Claude Vision
-          const claudeResult = await claudeVisionProcessor.processDocument(fileBlob, {
+          // Process document with Google Vision
+          const visionResult = await googleVisionProcessor.processDocument(fileBlob, {
             maxRetries: 3,
             timeout: 30000,
-            expectedDocumentType: undefined // Let Claude determine the type
+            expectedDocumentType: undefined // Let Google Vision determine the type
           });
 
           let result: DocumentProcessingResult;
 
-          if (claudeResult.success && claudeResult.data) {
-            const claudeData = claudeResult.data;
+          if (visionResult.success && visionResult.extractedData) {
+            const visionData = visionResult;
             
             result = {
               documentId,
@@ -205,65 +206,65 @@ router.post('/v1/documents/process',
               fileSize: file.size,
               mimeType: file.mimetype,
               status: 'processed',
-              documentType: claudeData.documentType,
+              documentType: visionData.documentType,
               extractedData: {
                 // Vehicle Information
-                vin: claudeData.extractedData?.vin,
-                licensePlate: claudeData.extractedData?.licensePlate,
-                make: claudeData.extractedData?.make,
-                model: claudeData.extractedData?.model,
-                year: claudeData.extractedData?.year,
+                vin: visionData.extractedData?.vin,
+                licensePlate: visionData.extractedData?.licensePlate,
+                make: visionData.extractedData?.make,
+                model: visionData.extractedData?.model,
+                year: visionData.extractedData?.year,
                 
                 // Driver Information
-                driverName: claudeData.extractedData?.driverName,
-                licenseNumber: claudeData.extractedData?.licenseNumber,
-                licenseClass: claudeData.extractedData?.licenseClass,
-                endorsements: claudeData.extractedData?.endorsements,
+                driverName: visionData.extractedData?.driverName,
+                licenseNumber: visionData.extractedData?.licenseNumber,
+                licenseClass: visionData.extractedData?.licenseClass,
+                endorsements: visionData.extractedData?.endorsements,
                 
                 // Document Dates
-                issueDate: claudeData.extractedData?.issueDate,
-                expirationDate: claudeData.extractedData?.expirationDate,
-                effectiveDate: claudeData.extractedData?.effectiveDate,
+                issueDate: visionData.extractedData?.issueDate,
+                expirationDate: visionData.extractedData?.expirationDate,
+                effectiveDate: visionData.extractedData?.effectiveDate,
                 
                 // Insurance Specific
-                policyNumber: claudeData.extractedData?.policyNumber,
-                insuranceCompany: claudeData.extractedData?.insuranceCompany,
-                coverageAmount: claudeData.extractedData?.coverageAmount,
+                policyNumber: visionData.extractedData?.policyNumber,
+                insuranceCompany: visionData.extractedData?.insuranceCompany,
+                coverageAmount: visionData.extractedData?.coverageAmount,
                 
                 // Medical Certificate Specific
-                medicalExaminerName: claudeData.extractedData?.medicalExaminerName,
-                medicalCertificateNumber: claudeData.extractedData?.medicalCertificateNumber,
-                restrictions: claudeData.extractedData?.restrictions,
+                medicalExaminerName: visionData.extractedData?.medicalExaminerName,
+                medicalCertificateNumber: visionData.extractedData?.medicalCertificateNumber,
+                restrictions: visionData.extractedData?.restrictions,
                 
                 // Registration Specific
-                registrationNumber: claudeData.extractedData?.registrationNumber,
-                state: claudeData.extractedData?.state,
-                ownerName: claudeData.extractedData?.ownerName,
+                registrationNumber: visionData.extractedData?.registrationNumber,
+                state: visionData.extractedData?.state,
+                ownerName: visionData.extractedData?.ownerName,
                 
                 // General
-                documentNumber: claudeData.extractedData?.documentNumber,
-                authority: claudeData.extractedData?.authority,
-                status: claudeData.extractedData?.status,
+                documentNumber: visionData.extractedData?.documentNumber,
+                authority: visionData.extractedData?.authority,
+                status: visionData.extractedData?.status,
                 
                 // Raw text
-                rawText: claudeData.rawText
+                rawText: visionData.extractedData?.rawText
               },
-              processingTime: claudeResult.processingTime || (Date.now() - fileProcessingStart),
-              confidence: claudeData.confidence,
-              fieldConfidence: claudeData.fieldConfidence,
-              dataQuality: claudeData.dataQuality,
-              conflicts: claudeData.conflicts,
-              validationResults: claudeData.validationResults,
-              requiresReview: claudeData.requiresReview,
-              autoApprovalRecommended: claudeData.autoApprovalRecommended,
-              processingNotes: claudeData.processingNotes,
+              processingTime: visionResult.processingTime || (Date.now() - fileProcessingStart),
+              confidence: visionData.confidence,
+              fieldConfidence: visionData.fieldConfidence,
+              dataQuality: visionData.dataQuality,
+              conflicts: visionData.conflicts,
+              validationResults: visionData.validationResults,
+              requiresReview: visionData.requiresReview,
+              autoApprovalRecommended: visionData.autoApprovalRecommended,
+              processingNotes: visionData.processingNotes,
               warnings: [],
               errors: []
             };
 
-            // Collect warnings from Claude processing
-            if (claudeData.processingNotes) {
-              claudeData.processingNotes.forEach(note => {
+            // Collect warnings from Google Vision processing
+            if (visionData.processingNotes) {
+              visionData.processingNotes.forEach(note => {
                 if (note.toLowerCase().includes('warning') || note.toLowerCase().includes('suspicious')) {
                   result.warnings?.push(note);
                   warnings.push(`${file.originalname}: ${note}`);
@@ -272,20 +273,20 @@ router.post('/v1/documents/process',
             }
 
             // Add data quality warnings
-            if (claudeData.dataQuality?.missingCriticalFields?.length > 0) {
-              const missingWarning = `Missing critical fields: ${claudeData.dataQuality.missingCriticalFields.join(', ')}`;
+            if (visionData.dataQuality?.missingCriticalFields?.length > 0) {
+              const missingWarning = `Missing critical fields: ${visionData.dataQuality.missingCriticalFields.join(', ')}`;
               result.warnings?.push(missingWarning);
               warnings.push(`${file.originalname}: ${missingWarning}`);
             }
 
             // Add validation warnings
-            if (claudeData.validationResults) {
-              if (!claudeData.validationResults.vinValid) {
+            if (visionData.validationResults) {
+              if (!visionData.validationResults.vinValid) {
                 const vinWarning = 'VIN validation failed';
                 result.warnings?.push(vinWarning);
                 warnings.push(`${file.originalname}: ${vinWarning}`);
               }
-              if (claudeData.validationResults.documentsExpired) {
+              if (visionData.validationResults.documentsExpired) {
                 const expiredWarning = 'Document appears to be expired';
                 result.warnings?.push(expiredWarning);
                 warnings.push(`${file.originalname}: ${expiredWarning}`);
@@ -293,15 +294,15 @@ router.post('/v1/documents/process',
             }
 
           } else {
-            // Claude Vision processing failed
+            // Google Vision processing failed
             result = {
               documentId,
               fileName: file.originalname,
               fileSize: file.size,
               mimeType: file.mimetype,
               status: 'failed',
-              processingTime: claudeResult.processingTime || (Date.now() - fileProcessingStart),
-              errors: [claudeResult.error || 'Claude Vision processing failed'],
+              processingTime: visionResult.processingTime || (Date.now() - fileProcessingStart),
+              errors: [visionResult.error || 'Google Vision processing failed'],
               confidence: 0
             };
           }
@@ -311,7 +312,7 @@ router.post('/v1/documents/process',
           // Store the processing result for later retrieval
           storeDocumentProcessingResult(result);
 
-          logger.info(`Claude Vision processing completed for ${file.originalname}`, {
+          logger.info(`Google Vision processing completed for ${file.originalname}`, {
             layer: 'api',
             component: 'DocumentsController',
             operation: 'processDocument',
@@ -320,7 +321,7 @@ router.post('/v1/documents/process',
           }, {
             documentId,
             fileName: file.originalname,
-            success: claudeResult.success,
+            success: visionResult.success,
             confidence: result.confidence,
             processingTime: result.processingTime,
             requiresReview: result.requiresReview,
@@ -382,7 +383,9 @@ router.post('/v1/documents/process',
           {
             requestId: context.requestId,
             version: context.apiVersion,
-            processingTime: summary.totalProcessingTime
+            meta: {
+              processingTime: summary.totalProcessingTime
+            }
           }
         );
 
@@ -403,7 +406,9 @@ router.post('/v1/documents/process',
           {
             requestId: context.requestId,
             version: context.apiVersion,
-            processingTime: summary.totalProcessingTime
+            meta: {
+              processingTime: summary.totalProcessingTime
+            }
           }
         );
 
@@ -585,9 +590,9 @@ async function getExtractedDocumentData(documentId: string): Promise<any | null>
     requiresReview: stored.result.requiresReview,
     autoApprovalRecommended: stored.result.autoApprovalRecommended,
     processingMetadata: {
-      ocrEngine: 'Claude Vision API',
+      ocrEngine: 'Google Vision API',
       processingTime: stored.result.processingTime,
-      imagePreprocessing: ['Claude Vision native preprocessing']
+      imagePreprocessing: ['Google Vision native preprocessing']
     }
   };
 }

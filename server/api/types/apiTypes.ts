@@ -30,6 +30,12 @@ export interface BaseApiResponse<T = any> {
     processingTime?: number;
     /** Any warnings that didn't prevent success */
     warnings?: string[];
+    /** Summary information for complex operations */
+    summary?: any;
+    /** Filter parameters used in the request */
+    filters?: any;
+    /** Sorting parameters used in the request */
+    sorting?: any;
   };
 }
 

@@ -2,7 +2,7 @@
 // Handles transformation between database models and API responses
 
 import { DataTransformer } from '../types/apiTypes';
-import { VehicleRecord } from '../../../src/services/persistentFleetStorage';
+import { VehicleRecord } from '../../../shared/types/vehicleTypes';
 
 // API Vehicle Response Format
 export interface ApiVehicle {
@@ -241,10 +241,11 @@ export class VehicleTransformer implements DataTransformer<VehicleRecord, ApiVeh
   }
 
   /**
-   * Transform API input to database format
+   * Transform API output back to database format
    */
-  reverse(output: ApiVehicleInput): Partial<VehicleRecord> {
+  reverse(output: ApiVehicle): VehicleRecord {
     return {
+      id: output.id,
       vin: output.vin,
       make: output.make,
       model: output.model,
@@ -253,6 +254,8 @@ export class VehicleTransformer implements DataTransformer<VehicleRecord, ApiVeh
       status: output.status || 'active',
       dotNumber: output.dotNumber,
       truckNumber: output.truckNumber,
+      dateAdded: output.createdAt,
+      lastUpdated: output.updatedAt,
       
       // Transform registration data
       registrationNumber: output.registration?.number,
@@ -266,9 +269,47 @@ export class VehicleTransformer implements DataTransformer<VehicleRecord, ApiVeh
       insuranceExpirationDate: output.insurance?.expirationDate,
       coverageAmount: output.insurance?.coverageAmount,
       
-      // Set timestamps
-      lastUpdated: new Date().toISOString()
+      // Transform compliance data
+      complianceStatus: this.mapComplianceStatus(output.compliance?.overall),
+      complianceData: output.compliance
     };
+  }
+  
+  /**
+   * Transform API input to database format (for create/update operations)
+   */
+  reverseInput(input: ApiVehicleInput): Partial<VehicleRecord> {
+    return {
+      vin: input.vin,
+      make: input.make,
+      model: input.model,
+      year: input.year,
+      licensePlate: input.licensePlate,
+      status: input.status || 'active',
+      dotNumber: input.dotNumber,
+      truckNumber: input.truckNumber,
+      
+      // Transform registration data
+      registrationNumber: input.registration?.number,
+      registrationState: input.registration?.state,
+      registrationExpirationDate: input.registration?.expirationDate,
+      registeredOwner: input.registration?.registeredOwner,
+      
+      // Transform insurance data
+      insuranceCarrier: input.insurance?.carrier,
+      policyNumber: input.insurance?.policyNumber,
+      insuranceExpirationDate: input.insurance?.expirationDate,
+      coverageAmount: input.insurance?.coverageAmount
+    };
+  }
+
+  private mapComplianceStatus(status?: string): 'compliant' | 'warning' | 'expired' | 'unknown' {
+    switch (status) {
+      case 'compliant': return 'compliant';
+      case 'expires_soon': return 'warning';
+      case 'non_compliant': return 'expired';
+      default: return 'unknown';
+    }
   }
 
   /**

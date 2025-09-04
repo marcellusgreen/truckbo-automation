@@ -14,7 +14,7 @@ import {
   healthCheck
 } from './middleware/errorHandling';
 import { ApiVersion } from './types/apiTypes';
-import { logger } from '../../src/services/logger';
+import { logger } from '../../shared/services/logger';
 
 // Import route handlers
 import vehiclesRoutes from './routes/vehicles';

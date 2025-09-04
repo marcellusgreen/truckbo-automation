@@ -75,6 +75,7 @@ export class ApiResponseBuilder {
       version?: ApiVersion;
       requestId?: string;
       processingTime?: number;
+      meta?: BaseApiResponse['meta'];
     }
   ): ApiWarningResponse<T> {
     return {
@@ -84,7 +85,8 @@ export class ApiResponseBuilder {
       warnings,
       meta: {
         processingTime: options?.processingTime,
-        warnings: warnings.map(w => w.message)
+        warnings: warnings.map(w => w.message),
+        ...options?.meta
       }
     };
   }
@@ -308,6 +310,7 @@ export class ApiResponseBuilder {
       version?: ApiVersion;
       requestId?: string;
       includeStack?: boolean;
+      processingTime?: number;
     }
   ): ApiErrorResponse {
     return this.error(

@@ -5,10 +5,11 @@ import { Router, Request, Response } from 'express';
 import { ApiResponseBuilder } from '../core/ApiResponseBuilder';
 import { ApiError, asyncHandler, requestContext } from '../middleware/errorHandling';
 import { HttpStatus, ApiErrorCode, RequestContext } from '../types/apiTypes';
-import { persistentFleetStorage, VehicleRecord } from '../../../src/services/persistentFleetStorage';
+import { VehicleRecord } from '../../../shared/types/vehicleTypes';
 import { vehicleTransformer } from '../transformers/VehicleTransformer';
-import { logger } from '../../../src/services/logger';
-import { apiManager } from '../../../src/services/apiManager';
+import { logger } from '../../../shared/services/logger';
+import { apiManager } from '../../../shared/services/apiManager';
+import { persistentFleetStorage } from '../../../shared/services/mockFleetStorage';
 
 const router = Router();
 

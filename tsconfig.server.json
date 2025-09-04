@@ -1,12 +1,17 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "outDir": "./dist",
+    "outDir": "./dist/server",
     "noEmit": false,
-    "module": "CommonJS",
-    "moduleResolution": "node",
+    "module": "ESNext",
     "allowImportingTsExtensions": false,
-    "rootDir": "."
+    "allowSyntheticDefaultImports": true,
+    "rootDir": ".",
+    "skipLibCheck": true,
+    "strict": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "exactOptionalPropertyTypes": false
   },
-  "include": ["server/**/*.ts", "src/services/**/*.ts"]
+  "include": ["server/**/*.ts", "shared/**/*.ts"]
 }

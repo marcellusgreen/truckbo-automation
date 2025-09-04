@@ -4,7 +4,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { ApiResponseBuilder } from '../core/ApiResponseBuilder';
 import { HttpStatus, ApiErrorCode, RequestContext } from '../types/apiTypes';
-import { logger } from '../../services/logger';
+import { logger } from '../../../shared/services/logger';
 
 // Custom API Error class
 export class ApiError extends Error {

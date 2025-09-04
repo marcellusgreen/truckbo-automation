@@ -1,7 +1,7 @@
 // API Test Suite
 // Comprehensive tests for the standardized API endpoints
 
-import { logger } from '../../services/logger';
+import { logger } from '../../../shared/services/logger';
 
 // Test configuration
 const BASE_URL = 'http://localhost:3001/api/v1';
@@ -332,8 +332,8 @@ class ApiTester {
     await this.runTest('Rate Limit Headers Present', async () => {
       const response = await this.makeRequest('GET', '/health');
       
-      this.assert(response.headers.get('X-RateLimit-Limit'), 'Should include rate limit header');
-      this.assert(response.headers.get('X-RateLimit-Remaining'), 'Should include remaining requests header');
+      this.assert(!!response.headers.get('X-RateLimit-Limit'), 'Should include rate limit header');
+      this.assert(!!response.headers.get('X-RateLimit-Remaining'), 'Should include remaining requests header');
       
       return {
         limit: response.headers.get('X-RateLimit-Limit'),
