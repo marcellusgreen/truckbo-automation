@@ -1,7 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "outDir": "./dist/server",
+    "outDir": "./api/dist",
     "noEmit": false,
     "module": "ESNext",
     "allowImportingTsExtensions": false,
