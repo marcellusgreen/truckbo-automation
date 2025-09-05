@@ -20,6 +20,7 @@ import { logger } from '../../shared/services/logger';
 import vehiclesRoutes from './routes/vehicles';
 import documentsRoutes from './routes/documents';
 import complianceRoutes from './routes/compliance';
+import authRoutes from './routes/auth';
 
 const app = express();
 
@@ -149,6 +150,11 @@ app.get('/api/docs', (req, res) => {
       description: 'Standardized API for vehicle fleet management and compliance',
       baseUrl: '/api/v1',
       endpoints: {
+        auth: {
+          'POST /auth/initialize-demo': 'Initialize demo data for development/testing',
+          'POST /auth/login': 'User login with email and password',
+          'POST /auth/register': 'Register new company and admin user'
+        },
         vehicles: {
           'GET /vehicles': 'List all vehicles with filtering and pagination',
           'GET /vehicles/:id': 'Get specific vehicle details',
@@ -200,6 +206,7 @@ app.get('/api/docs', (req, res) => {
 });
 
 // Mount API route handlers with versioning
+app.use('/api', authRoutes);
 app.use('/api', vehiclesRoutes);
 app.use('/api', documentsRoutes);
 app.use('/api', complianceRoutes);

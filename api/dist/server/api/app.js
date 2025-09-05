@@ -15,6 +15,7 @@ const logger_1 = require("../../shared/services/logger");
 const vehicles_1 = __importDefault(require("./routes/vehicles"));
 const documents_1 = __importDefault(require("./routes/documents"));
 const compliance_1 = __importDefault(require("./routes/compliance"));
+const auth_1 = __importDefault(require("./routes/auth"));
 const app = (0, express_1.default)();
 // Security middleware
 app.use((0, helmet_1.default)({
@@ -129,6 +130,11 @@ app.get('/api/docs', (req, res) => {
             description: 'Standardized API for vehicle fleet management and compliance',
             baseUrl: '/api/v1',
             endpoints: {
+                auth: {
+                    'POST /auth/initialize-demo': 'Initialize demo data for development/testing',
+                    'POST /auth/login': 'User login with email and password',
+                    'POST /auth/register': 'Register new company and admin user'
+                },
                 vehicles: {
                     'GET /vehicles': 'List all vehicles with filtering and pagination',
                     'GET /vehicles/:id': 'Get specific vehicle details',
@@ -179,6 +185,7 @@ app.get('/api/docs', (req, res) => {
     });
 });
 // Mount API route handlers with versioning
+app.use('/api', auth_1.default);
 app.use('/api', vehicles_1.default);
 app.use('/api', documents_1.default);
 app.use('/api', compliance_1.default);

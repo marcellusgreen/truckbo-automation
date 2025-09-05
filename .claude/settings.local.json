@@ -40,7 +40,11 @@
       "Read(/C:\\Projects\\Claude Projects\\truckbo-automation\\truckbo-automation-new\\dist/**)",
       "Read(/C:\\Projects\\Claude Projects\\truckbo-automation\\truckbo-automation-new\\api\\dist\\shared\\services/**)",
       "Read(/C:\\Projects\\Claude Projects\\truckbo-automation\\truckbo-automation-new/**)",
-      "Read(/C:\\Projects\\Claude Projects\\truckbo-automation\\truckbo-automation-new\\api\\dist\\server\\api/**)"
+      "Read(/C:\\Projects\\Claude Projects\\truckbo-automation\\truckbo-automation-new\\api\\dist\\server\\api/**)",
+      "Read(/C:\\Projects\\Claude Projects\\truckbo-automation\\truckbo-automation-new\\server\\routes/**)",
+      "Read(/C:\\Projects\\Claude Projects\\truckbo-automation\\truckbo-automation-new\\server\\api/**)",
+      "Read(/C:\\Projects\\Claude Projects\\truckbo-automation\\truckbo-automation-new\\server\\api\\types/**)",
+      "Read(/C:\\Projects\\Claude Projects\\truckbo-automation\\truckbo-automation-new\\api\\dist\\server\\api\\routes/**)"
     ],
     "deny": [],
     "ask": []
