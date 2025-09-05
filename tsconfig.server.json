@@ -3,9 +3,12 @@
   "compilerOptions": {
     "outDir": "./api/dist",
     "noEmit": false,
-    "module": "ESNext",
+    "module": "CommonJS",
+    "target": "ES2020",
+    "moduleResolution": "node",
     "allowImportingTsExtensions": false,
     "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
     "rootDir": ".",
     "skipLibCheck": true,
     "strict": false,
@@ -13,5 +16,6 @@
     "noUnusedParameters": false,
     "exactOptionalPropertyTypes": false
   },
-  "include": ["server/**/*.ts", "shared/**/*.ts"]
+  "include": ["server/**/*.ts", "shared/**/*.ts"],
+  "exclude": ["server/**/*.test.ts", "server/api/test/**/*"]
 }

@@ -1,5 +1,5 @@
 
 // api/index.js
-import app from './dist/server/api/app.js';
+const app = require('./dist/server/api/app.js');
 
-export default app;
+module.exports = app;
