@@ -450,15 +450,15 @@ router.get('/v1/compliance/vehicle/:id', asyncHandler(async (req: Request, res: 
       
       // Risk assessment
       riskAssessment: {
-        overall: 'low', // Based on compliance status
-        factors: [],
-        recommendations: []
+        overall: 'low' as 'low' | 'medium' | 'critical', // Based on compliance status
+        factors: [] as string[],
+        recommendations: [] as string[]
       }
     };
 
     // Add risk factors and recommendations
-    const riskFactors = [];
-    const recommendations = [];
+    const riskFactors: string[] = [];
+    const recommendations: string[] = [];
 
     if (complianceDetails.registration.status === 'expired') {
       riskFactors.push('Expired vehicle registration');

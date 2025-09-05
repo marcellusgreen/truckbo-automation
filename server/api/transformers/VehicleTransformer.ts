@@ -152,7 +152,7 @@ export class VehicleTransformer implements DataTransformer<VehicleRecord, ApiVeh
       }
       
       // Overall compliance logic
-      let overall: ApiVehicle['compliance']['overall'] = 'compliant';
+      let overall: 'compliant' | 'non_compliant' | 'expires_soon' | 'review_needed' | 'incomplete' = 'compliant';
       
       if (registrationStatus === 'expired' || insuranceStatus === 'expired') {
         overall = 'non_compliant';

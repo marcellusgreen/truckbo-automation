@@ -222,7 +222,16 @@ router.post('/v1/vehicles', asyncHandler(async (req: Request, res: Response) => 
     if (existingVehicle) {
       // Update existing vehicle
       const updateData = vehicleTransformer.reverseInput(vehicleInput);
-      savedVehicle = await persistentFleetStorage.updateVehicle(existingVehicle.id, updateData);
+      const updatedVehicle = await persistentFleetStorage.updateVehicle(existingVehicle.id, updateData);
+      
+      if (!updatedVehicle) {
+        return ApiResponseBuilder.error('RESOURCE_NOT_FOUND', 'Vehicle not found', 'The requested vehicle could not be found', {
+          requestId: context.requestId,
+          httpStatus: 404
+        });
+      }
+      
+      savedVehicle = updatedVehicle;
       isUpdate = true;
 
       logger.info('Vehicle updated successfully', {
@@ -329,6 +338,13 @@ router.put('/v1/vehicles/:id', asyncHandler(async (req: Request, res: Response) 
     // Update vehicle
     const updateData = vehicleTransformer.reverseInput(vehicleInput);
     const updatedVehicle = await persistentFleetStorage.updateVehicle(id, updateData);
+
+    if (!updatedVehicle) {
+      return ApiResponseBuilder.error('RESOURCE_NOT_FOUND', 'Vehicle not found', 'The requested vehicle could not be found', {
+        requestId: context.requestId,
+        httpStatus: 404
+      });
+    }
 
     // Transform response data
     const transformedVehicle = vehicleTransformer.transform(updatedVehicle);
