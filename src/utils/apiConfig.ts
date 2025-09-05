@@ -15,13 +15,13 @@ export const API_CONFIG = {
   baseUrl: getApiBaseUrl(),
   endpoints: {
     auth: {
-      login: '/api/auth/login',
-      register: '/api/auth/register',
-      initializeDemo: '/api/auth/initialize-demo'
+      login: '/api/v1/auth/login',
+      register: '/api/v1/auth/register',
+      initializeDemo: '/api/v1/auth/initialize-demo'
     },
-    vehicles: '/api/fleet',
-    drivers: '/api/drivers',
-    documents: '/api/documents'
+    vehicles: '/api/v1/vehicles',
+    drivers: '/api/v1/drivers',
+    documents: '/api/v1/documents'
   }
 };
 

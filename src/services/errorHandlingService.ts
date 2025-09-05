@@ -368,7 +368,8 @@ export class ErrorHandlerService {
    * Check if error is AppError
    */
   private isAppError(error: Error): error is AppError {
-    return 'category' in error && 'severity' in error;
+    return typeof error === 'object' && error !== null && 
+           'category' in error && 'severity' in error;
   }
 
   /**
