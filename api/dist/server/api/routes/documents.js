@@ -12,10 +12,13 @@ const apiTypes_1 = require("../types/apiTypes");
 const logger_1 = require("../../../shared/services/logger");
 const googleVisionProcessor_1 = require("../../../shared/services/googleVisionProcessor");
 const multer_1 = __importDefault(require("multer"));
+const fs_1 = __importDefault(require("fs"));
 const router = (0, express_1.Router)();
 // Configure multer for file uploads
+const uploadDir = '/tmp/uploads';
+fs_1.default.mkdirSync(uploadDir, { recursive: true });
 const upload = (0, multer_1.default)({
-    dest: 'uploads/',
+    dest: uploadDir,
     limits: {
         fileSize: 50 * 1024 * 1024, // 50MB limit
         files: 10 // Maximum 10 files per request
