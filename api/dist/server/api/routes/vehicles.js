@@ -171,7 +171,14 @@ router.post('/v1/vehicles', (0, errorHandling_1.asyncHandler)(async (req, res) =
         if (existingVehicle) {
             // Update existing vehicle
             const updateData = VehicleTransformer_1.vehicleTransformer.reverseInput(vehicleInput);
-            savedVehicle = await mockFleetStorage_1.persistentFleetStorage.updateVehicle(existingVehicle.id, updateData);
+            const updatedVehicle = await mockFleetStorage_1.persistentFleetStorage.updateVehicle(existingVehicle.id, updateData);
+            if (!updatedVehicle) {
+                return ApiResponseBuilder_1.ApiResponseBuilder.error('RESOURCE_NOT_FOUND', 'Vehicle not found', 'The requested vehicle could not be found', {
+                    requestId: context.requestId,
+                    httpStatus: 404
+                });
+            }
+            savedVehicle = updatedVehicle;
             isUpdate = true;
             logger_1.logger.info('Vehicle updated successfully', {
                 layer: 'api',
@@ -258,6 +265,12 @@ router.put('/v1/vehicles/:id', (0, errorHandling_1.asyncHandler)(async (req, res
         // Update vehicle
         const updateData = VehicleTransformer_1.vehicleTransformer.reverseInput(vehicleInput);
         const updatedVehicle = await mockFleetStorage_1.persistentFleetStorage.updateVehicle(id, updateData);
+        if (!updatedVehicle) {
+            return ApiResponseBuilder_1.ApiResponseBuilder.error('RESOURCE_NOT_FOUND', 'Vehicle not found', 'The requested vehicle could not be found', {
+                requestId: context.requestId,
+                httpStatus: 404
+            });
+        }
         // Transform response data
         const transformedVehicle = VehicleTransformer_1.vehicleTransformer.transform(updatedVehicle);
         const response = ApiResponseBuilder_1.ApiResponseBuilder.success(transformedVehicle, 'Vehicle updated successfully', {

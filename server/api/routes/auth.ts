@@ -2,12 +2,18 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { Pool } from 'pg';
+import crypto from 'crypto';
 import { ApiResponseBuilder } from '../core/ApiResponseBuilder';
 import { createRateLimit } from '../middleware/errorHandling';
+import dotenv from 'dotenv';
+
+// Ensure environment variables are loaded
+dotenv.config();
 
 const router = Router();
 
 // Database connection
+console.log('🔌 DATABASE_URL configured:', process.env.DATABASE_URL ? 'Yes' : 'No');
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
@@ -51,7 +57,7 @@ function generateJWT(user: any, company: any): string {
  */
 function generateRefreshToken(): string {
   const array = new Uint8Array(32);
-  require('crypto').getRandomValues(array);
+  crypto.getRandomValues(array);
   return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
@@ -88,117 +94,34 @@ router.post('/v1/auth/initialize-demo', authRateLimit, async (req: Request, res:
   const client = await pool.connect();
   
   try {
-    await client.query('BEGIN');
+    console.log('🔍 Checking demo authentication data...');
 
-    console.log('🏗️ Initializing demo authentication data...');
+    // Check if we already have demo users and organizations
+    const usersResult = await client.query('SELECT COUNT(*) as count FROM users');
+    const orgsResult = await client.query('SELECT COUNT(*) as count FROM organizations');
+    
+    const userCount = parseInt(usersResult.rows[0].count);
+    const orgCount = parseInt(orgsResult.rows[0].count);
 
-    // Create demo organizations if they don't exist
-    const demoCompanies = [
-      {
-        id: '550e8400-e29b-41d4-a716-446655440000',
-        name: 'Sunbelt Trucking LLC',
-        dot_number: '12345678',
-        mc_number: 'MC-987654',
-        address: {
-          street: '123 Industrial Blvd',
-          city: 'Dallas',
-          state: 'TX',
-          zipCode: '75201'
-        },
-        contact_info: {
-          email: 'admin@sunbelttrucking.com',
-          phone: '214-555-0123'
-        }
-      },
-      {
-        id: '550e8400-e29b-41d4-a716-446655440001',
-        name: 'Lone Star Logistics',
-        dot_number: '87654321',
-        mc_number: 'MC-123456',
-        address: {
-          street: '456 Commerce Way',
-          city: 'Houston',
-          state: 'TX',
-          zipCode: '77001'
-        },
-        contact_info: {
-          email: 'admin@lonestarlogistics.com',
-          phone: '713-555-0456'
-        }
-      }
-    ];
+    console.log(`📊 Found ${userCount} users and ${orgCount} organizations in database`);
 
-    // Insert organizations
-    for (const company of demoCompanies) {
-      await client.query(`
-        INSERT INTO organizations (id, name, dot_number, mc_number, address, contact_info)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (id) DO NOTHING
-      `, [
-        company.id,
-        company.name,
-        company.dot_number,
-        company.mc_number,
-        JSON.stringify(company.address),
-        JSON.stringify(company.contact_info)
-      ]);
+    if (userCount > 0 && orgCount > 0) {
+      console.log('✅ Demo authentication data already exists');
+      console.log('🔐 Demo password for existing accounts: TruckBo2025!');
+      
+      // Get a sample of existing users for display
+      const sampleUsers = await client.query(`
+        SELECT email, first_name, last_name, role 
+        FROM users 
+        ORDER BY email 
+        LIMIT 5
+      `);
+      
+      console.log('👥 Sample users:', sampleUsers.rows);
+    } else {
+      console.log('⚠️  No demo data found. Database appears to be empty.');
+      console.log('💡 Please ensure your database has been properly seeded with demo data.');
     }
-
-    // Create demo users with hashed passwords
-    const demoPassword = 'TruckBo2025!';
-    const passwordHash = await bcrypt.hash(demoPassword, SALT_ROUNDS);
-
-    const demoUsers = [
-      {
-        id: 'user_admin1',
-        organization_id: '550e8400-e29b-41d4-a716-446655440000',
-        email: 'admin@sunbelttrucking.com',
-        password_hash: passwordHash,
-        first_name: 'Sarah',
-        last_name: 'Johnson',
-        role: 'admin'
-      },
-      {
-        id: 'user_manager1',
-        organization_id: '550e8400-e29b-41d4-a716-446655440000',
-        email: 'manager@sunbelttrucking.com',
-        password_hash: passwordHash,
-        first_name: 'Mike',
-        last_name: 'Rodriguez',
-        role: 'manager'
-      },
-      {
-        id: 'user_admin2',
-        organization_id: '550e8400-e29b-41d4-a716-446655440001',
-        email: 'admin@lonestarlogistics.com',
-        password_hash: passwordHash,
-        first_name: 'Jennifer',
-        last_name: 'Davis',
-        role: 'admin'
-      }
-    ];
-
-    // Insert users
-    for (const user of demoUsers) {
-      await client.query(`
-        INSERT INTO users (id, organization_id, email, password_hash, first_name, last_name, role)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (email) DO NOTHING
-      `, [
-        user.id,
-        user.organization_id,
-        user.email,
-        user.password_hash,
-        user.first_name,
-        user.last_name,
-        user.role
-      ]);
-    }
-
-    await client.query('COMMIT');
-
-    console.log('✅ Demo authentication data initialized');
-    console.log('🔐 Demo password for all accounts: TruckBo2025!');
 
     const response = ApiResponseBuilder.success(
       { message: 'Demo data initialized successfully', password: 'TruckBo2025!' },

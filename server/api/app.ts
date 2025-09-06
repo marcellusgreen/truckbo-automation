@@ -57,11 +57,13 @@ app.use(compression());
 app.use(express.json({ 
   limit: '10mb',
   verify: (req, res, buf) => {
-    // Verify JSON payload
-    try {
-      JSON.parse(buf.toString());
-    } catch (e) {
-      throw new Error('Invalid JSON payload');
+    // Only verify JSON if there's actually content
+    if (buf.length > 0) {
+      try {
+        JSON.parse(buf.toString());
+      } catch (e) {
+        throw new Error('Invalid JSON payload');
+      }
     }
   }
 }));
@@ -293,20 +295,18 @@ process.on('unhandledRejection', (reason: unknown, promise: Promise<any>) => {
 
 export default app;
 
-// Start server if this file is run directly
-if (require.main === module) {
-  const PORT = process.env.PORT || 3001;
-  
-  app.listen(PORT, () => {
-    logger.info(`API server started on port ${PORT}`, {
-      layer: 'api',
-      component: 'Application',
-      operation: 'startup'
-    }, {
-      port: PORT,
-      environment: process.env.NODE_ENV || 'development',
-      nodeVersion: process.version,
-      apiVersion: process.env.API_VERSION || '1.0.0'
-    });
+// Start server 
+const PORT = process.env.PORT || 3001;
+
+app.listen(PORT, () => {
+  logger.info(`API server started on port ${PORT}`, {
+    layer: 'api',
+    component: 'Application',
+    operation: 'startup'
+  }, {
+    port: PORT,
+    environment: process.env.NODE_ENV || 'development',
+    nodeVersion: process.version,
+    apiVersion: process.env.API_VERSION || '1.0.0'
   });
-}
+});

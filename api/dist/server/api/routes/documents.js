@@ -166,7 +166,7 @@ router.post('/v1/documents/process', upload.array('documents', 10), (0, errorHan
                         });
                     }
                     // Add data quality warnings
-                    if (visionData.dataQuality?.missingCriticalFields?.length > 0) {
+                    if (visionData.dataQuality?.missingCriticalFields?.length && visionData.dataQuality.missingCriticalFields.length > 0) {
                         const missingWarning = `Missing critical fields: ${visionData.dataQuality.missingCriticalFields.join(', ')}`;
                         result.warnings?.push(missingWarning);
                         warnings.push(`${file.originalname}: ${missingWarning}`);
