@@ -1,6 +1,9 @@
 // AI-Powered Document Processing Service
 // Processes bulk uploaded registration and insurance documents
 
+import * as pdfjsLib from 'pdfjs-dist/build/pdf';
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.js', import.meta.url).toString();
+
 import { truckNumberParser } from './truckNumberParser';
 import { serverPDFService } from './serverPDFService';
 import { createWorker, Worker } from 'tesseract.js';
@@ -957,6 +960,12 @@ TRUCK NUMBER: ${truckNum}
     
     try {
       if (file.type === 'application/pdf') {
+        // Check if pdfjs is available, otherwise fall back to server processing
+        if (typeof pdfjsLib === 'undefined') {
+          console.log('📄 pdfjsLib not available, using server-side PDF processing');
+          return await this.processTextBasedPDF(file, options, startTime);
+        }
+        
         const arrayBuffer = await file.arrayBuffer();
         const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
         const page = await pdf.getPage(1);
