@@ -2,7 +2,7 @@
 // Processes bulk uploaded registration and insurance documents
 
 import * as pdfjsLib from 'pdfjs-dist/build/pdf';
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.js', import.meta.url).toString();
+pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 
 import { truckNumberParser } from './truckNumberParser';
 import { serverPDFService } from './serverPDFService';
