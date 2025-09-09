@@ -183,7 +183,7 @@ class AuthenticationService {
       this.notifySessionListeners();
 
       this.errorHandler.showSuccess(`Welcome back, ${data.user?.firstName || 'User'}!`);
-      console.log(`🔐 User logged in: ${data.user.email} (${data.company.name})`);
+      console.log(`🔐 User logged in: ${data.user?.email || 'unknown'} (${data.company?.name || 'unknown'})`);
 
       return session;
 
@@ -265,7 +265,7 @@ class AuthenticationService {
    */
   logout(): void {
     if (this.currentSession) {
-      console.log(`🔐 User logged out: ${this.currentSession.user.email}`);
+      console.log(`🔐 User logged out: ${this.currentSession.user?.email || 'unknown'}`);
       this.errorHandler.showInfo(`Goodbye, ${this.currentSession.user?.firstName || 'User'}!`);
     }
 
@@ -453,7 +453,7 @@ class AuthenticationService {
         
         if (now < expiresAt) {
           this.currentSession = session;
-          console.log(`🔐 Session restored for: ${session.user.email}`);
+          console.log(`🔐 Session restored for: ${session.user?.email || 'unknown'}`);
         } else {
           localStorage.removeItem(this.SESSION_KEY);
           console.log('🔐 Session expired, removed from storage');
