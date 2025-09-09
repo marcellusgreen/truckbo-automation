@@ -130,6 +130,8 @@ class ServerPDFService {
       const isProduction = import.meta.env.PROD || window.location.hostname !== 'localhost';
       const endpoint = isProduction ? `${serverUrl}/api/pdf-process` : `${serverUrl}/api/process-pdf`;
       
+      console.log(`📍 PDF Processing endpoint: ${endpoint} (isProduction: ${isProduction})`);
+      
       const response = await fetch(endpoint, {
         method: 'POST',
         body: formData,
@@ -144,6 +146,13 @@ class ServerPDFService {
         const errorMessage = errorData.error || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
         
         console.error(`❌ Server returned error ${response.status} for ${file.name}:`, errorData);
+        console.error(`📝 Full server error response:`, {
+          status: response.status,
+          statusText: response.statusText,
+          url: response.url,
+          headers: Object.fromEntries(response.headers.entries()),
+          errorData
+        });
         
         return {
           success: false,
