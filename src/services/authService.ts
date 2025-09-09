@@ -188,10 +188,16 @@ class AuthenticationService {
       return session;
 
     } catch (error) {
-      this.errorHandler.handleError(
+      const authError = this.errorHandler.createError(
         error instanceof Error ? error.message : 'Login failed',
-        'Please check your credentials and try again'
+        'auth',
+        'medium',
+        {
+          originalError: error as Error,
+          userMessage: 'Please check your credentials and try again.'
+        }
       );
+      this.errorHandler.handleError(authError);
       throw error;
     }
   }
@@ -240,10 +246,16 @@ class AuthenticationService {
       return session;
 
     } catch (error) {
-      this.errorHandler.handleError(
+      const authError = this.errorHandler.createError(
         error instanceof Error ? error.message : 'Registration failed',
-        'Please check your information and try again'
+        'auth',
+        'medium',
+        {
+          originalError: error as Error,
+          userMessage: 'Please check your information and try again.'
+        }
       );
+      this.errorHandler.handleError(authError);
       throw error;
     }
   }
