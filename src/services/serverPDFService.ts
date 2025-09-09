@@ -74,7 +74,8 @@ class ServerPDFService {
       console.log(`✅ Server health response:`, data);
       console.log(`🔍 Health check details - status: ${data.status}, pdfProcessorReady: ${data.pdfProcessorReady}`);
       
-      const isHealthy = data.status === 'ok' && data.pdfProcessorReady;
+      const isHealthy = (data.status === 'ok' || data.status === 'success') && 
+                       (data.pdfProcessorReady === true || data.pdfProcessorReady === undefined);
       
       if (!isHealthy && this.currentServer) {
         // Mark current server as unhealthy and clear it
