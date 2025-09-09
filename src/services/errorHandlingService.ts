@@ -353,12 +353,12 @@ export class ErrorHandlerService {
       return this.createValidationError(error.message, undefined, undefined, context);
     }
     
-    if (error.name === 'NetworkError' || error.message.includes('fetch')) {
-      return this.createNetworkError(error.message, undefined, undefined, context);
+    if (error.name === 'NetworkError' || (error.message && error.message.includes('fetch'))) {
+      return this.createNetworkError(error.message || 'Network error occurred', undefined, undefined, context);
     }
 
     // Generic error conversion
-    return this.createError(error.message, 'unknown', 'medium', {
+    return this.createError(error.message || 'An unknown error occurred', 'unknown', 'medium', {
       originalError: error,
       context
     });
@@ -587,6 +587,79 @@ export class ErrorHandlerService {
     logger.info('Error statistics cleared', {
       component: 'ErrorHandlerService',
       operation: 'clear_stats'
+    });
+  }
+
+  // ===========================================
+  // USER NOTIFICATION METHODS
+  // ===========================================
+
+  /**
+   * Show success notification
+   */
+  showSuccess(message: string, duration: number = 3000): void {
+    const notification: ErrorNotification = {
+      id: `success_${Date.now()}`,
+      type: 'success',
+      title: 'Success',
+      message,
+      duration
+    };
+    
+    this.notificationCallbacks.forEach(callback => {
+      try {
+        callback(notification);
+      } catch (error) {
+        logger.error('Error in success notification callback', {
+          component: 'ErrorHandlerService'
+        }, error as Error);
+      }
+    });
+  }
+
+  /**
+   * Show info notification
+   */
+  showInfo(message: string, duration: number = 3000): void {
+    const notification: ErrorNotification = {
+      id: `info_${Date.now()}`,
+      type: 'info',
+      title: 'Info',
+      message,
+      duration
+    };
+    
+    this.notificationCallbacks.forEach(callback => {
+      try {
+        callback(notification);
+      } catch (error) {
+        logger.error('Error in info notification callback', {
+          component: 'ErrorHandlerService'
+        }, error as Error);
+      }
+    });
+  }
+
+  /**
+   * Show warning notification
+   */
+  showWarning(message: string, duration: number = 5000): void {
+    const notification: ErrorNotification = {
+      id: `warning_${Date.now()}`,
+      type: 'warning',
+      title: 'Warning',
+      message,
+      duration
+    };
+    
+    this.notificationCallbacks.forEach(callback => {
+      try {
+        callback(notification);
+      } catch (error) {
+        logger.error('Error in warning notification callback', {
+          component: 'ErrorHandlerService'
+        }, error as Error);
+      }
     });
   }
 }
