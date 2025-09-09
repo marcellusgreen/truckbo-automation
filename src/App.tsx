@@ -19,14 +19,7 @@ import { DriverManagementPage } from './components/DriverManagementPage';
 import { ReportingDashboard } from './components/ReportingDashboard';
 import { NotificationSystem, ErrorBoundary } from './components/NotificationSystem';
 import { AuthWrapper } from './components/AuthComponents';
-// import { authService } from './services/authService'; // Temporarily disabled for build
-const authService = {
-  getCurrentUser: () => null,
-  isAuthenticated: () => false,
-  login: async () => ({ success: false, error: 'Auth disabled for build' }),
-  logout: async () => ({ success: true }),
-  setupCompany: async () => ({ success: false, error: 'Setup disabled for build' })
-};
+import { authService } from './services/authService';
 import { ExtractedVehicleData } from './services/documentProcessor';
 import { comprehensiveComplianceService } from './services/comprehensiveComplianceApi';
 import { documentDownloadService } from './services/documentDownloadService';
