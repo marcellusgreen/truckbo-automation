@@ -83,6 +83,11 @@ class PersistentFleetStorage {
   private async getAuthHeaders() {
     const session = authService.getCurrentSession();
     if (!session?.token) {
+      // Check if user is authenticated; if not, trigger logout
+      if (!authService.isAuthenticated()) {
+        console.log('🔐 Authentication expired, logging out user');
+        authService.logout();
+      }
       throw new Error('No authentication token found.');
     }
     return {
@@ -99,7 +104,7 @@ class PersistentFleetStorage {
     };
     return await withErrorHandling.async(async () => {
       const headers = await this.getAuthHeaders();
-      const response = await fetch('/api/fleet', { headers });
+      const response = await fetch('/api/v1/vehicles', { headers });
       if (!response.ok) {
         throw new Error('Failed to fetch fleet data');
       }
@@ -116,7 +121,7 @@ class PersistentFleetStorage {
     };
     return await withErrorHandling.async(async () => {
       const headers = await this.getAuthHeaders();
-      const response = await fetch('/api/vehicles', {
+      const response = await fetch('/api/v1/vehicles', {
         method: 'POST',
         headers,
         body: JSON.stringify(vehicle)
@@ -139,7 +144,7 @@ class PersistentFleetStorage {
     };
     return await withErrorHandling.async(async () => {
       const headers = await this.getAuthHeaders();
-      const response = await fetch(`/api/vehicles/${id}`, {
+      const response = await fetch(`/api/v1/vehicles/${id}`, {
         method: 'PUT',
         headers,
         body: JSON.stringify(updates)
@@ -162,7 +167,7 @@ class PersistentFleetStorage {
     };
     await withErrorHandling.async(async () => {
       const headers = await this.getAuthHeaders();
-      const response = await fetch(`/api/vehicles/${id}`, {
+      const response = await fetch(`/api/v1/vehicles/${id}`, {
         method: 'DELETE',
         headers
       });
@@ -183,7 +188,7 @@ class PersistentFleetStorage {
     };
     return await withErrorHandling.async(async () => {
       const headers = await this.getAuthHeaders();
-      const response = await fetch('/api/drivers', { headers });
+      const response = await fetch('/api/v1/drivers', { headers });
       if (!response.ok) {
         throw new Error('Failed to fetch drivers data');
       }
@@ -200,7 +205,7 @@ class PersistentFleetStorage {
     };
     return await withErrorHandling.async(async () => {
       const headers = await this.getAuthHeaders();
-      const response = await fetch('/api/drivers', {
+      const response = await fetch('/api/v1/drivers', {
         method: 'POST',
         headers,
         body: JSON.stringify(driver)
@@ -222,7 +227,7 @@ class PersistentFleetStorage {
     };
     return await withErrorHandling.async(async () => {
       const headers = await this.getAuthHeaders();
-      const response = await fetch(`/api/drivers/${id}`, {
+      const response = await fetch(`/api/v1/drivers/${id}`, {
         method: 'PUT',
         headers,
         body: JSON.stringify(updates)

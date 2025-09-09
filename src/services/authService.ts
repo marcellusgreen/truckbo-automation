@@ -182,7 +182,7 @@ class AuthenticationService {
       this.saveSession(session);
       this.notifySessionListeners();
 
-      this.errorHandler.showSuccess(`Welcome back, ${data.user.firstName}!`);
+      this.errorHandler.showSuccess(`Welcome back, ${data.user?.firstName || 'User'}!`);
       console.log(`🔐 User logged in: ${data.user.email} (${data.company.name})`);
 
       return session;
@@ -240,7 +240,7 @@ class AuthenticationService {
       this.saveSession(session);
       this.notifySessionListeners();
 
-      this.errorHandler.showSuccess(`Welcome to TruckBo Pro, ${responseData.user.firstName}! Your company has been registered.`);
+      this.errorHandler.showSuccess(`Welcome to TruckBo Pro, ${responseData.user?.firstName || 'User'}! Your company has been registered.`);
       console.log(`🏢 New company registered: ${responseData.company.name}`);
 
       return session;
@@ -266,7 +266,7 @@ class AuthenticationService {
   logout(): void {
     if (this.currentSession) {
       console.log(`🔐 User logged out: ${this.currentSession.user.email}`);
-      this.errorHandler.showInfo(`Goodbye, ${this.currentSession.user.firstName}!`);
+      this.errorHandler.showInfo(`Goodbye, ${this.currentSession.user?.firstName || 'User'}!`);
     }
 
     this.currentSession = null;
