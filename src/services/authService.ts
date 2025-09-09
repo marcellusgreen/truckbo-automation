@@ -163,13 +163,17 @@ class AuthenticationService {
         })
       });
 
-      const data = await response.json();
+      const apiResponse = await response.json();
+      console.log('🔍 Login API Response:', apiResponse);
 
       if (!response.ok) {
-        throw new Error(data.message || 'Login failed');
+        throw new Error(apiResponse.message || 'Login failed');
       }
 
-      // Create session from API response
+      // Extract data from wrapped API response
+      const data = apiResponse.data;
+      
+      // Create session from API response data
       const session: AuthSession = {
         user: data.user,
         company: data.company,
@@ -177,6 +181,7 @@ class AuthenticationService {
         expiresAt: data.expiresAt,
         refreshToken: data.refreshToken
       };
+      console.log('🔍 Created Session:', session);
 
       this.currentSession = session;
       this.saveSession(session);
@@ -221,11 +226,14 @@ class AuthenticationService {
         body: JSON.stringify(data)
       });
 
-      const responseData = await response.json();
+      const apiResponse = await response.json();
 
       if (!response.ok) {
-        throw new Error(responseData.message || 'Registration failed');
+        throw new Error(apiResponse.message || 'Registration failed');
       }
+
+      // Extract data from wrapped API response
+      const responseData = apiResponse.data;
 
       // Create session from API response
       const session: AuthSession = {
@@ -241,7 +249,7 @@ class AuthenticationService {
       this.notifySessionListeners();
 
       this.errorHandler.showSuccess(`Welcome to TruckBo Pro, ${responseData.user?.firstName || 'User'}! Your company has been registered.`);
-      console.log(`🏢 New company registered: ${responseData.company.name}`);
+      console.log(`🏢 New company registered: ${responseData.company?.name || 'unknown'}`);
 
       return session;
 
