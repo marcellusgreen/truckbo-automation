@@ -121,14 +121,12 @@ class ServerPDFService {
 
       // 3. Prepare and send request
       const formData = new FormData();
-      formData.append('pdf', file);
+      formData.append('documents', file);
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 180000); // 3 minute timeout
 
-      // Use different endpoints for development vs production
-      const isProduction = import.meta.env.PROD || window.location.hostname !== 'localhost';
-      const endpoint = isProduction ? `${serverUrl}/api/pdf-process` : `${serverUrl}/api/process-pdf`;
+      const endpoint = `${serverUrl}/api/v1/documents/process`;
       
       console.log(`📍 PDF Processing endpoint: ${endpoint} (isProduction: ${isProduction})`);
       

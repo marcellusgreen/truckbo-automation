@@ -413,6 +413,7 @@ export const healthCheck = (req: Request, res: Response): void => {
       storage: { status: 'up' as const, lastCheck: new Date().toISOString() },
       logging: { status: 'up' as const, lastCheck: new Date().toISOString() }
     },
+    pdfProcessorReady: true,
     metrics: {
       memoryUsage: process.memoryUsage(),
       cpuUsage: process.cpuUsage(),
