@@ -108,8 +108,8 @@ class PersistentFleetStorage {
       if (!response.ok) {
         throw new Error('Failed to fetch fleet data');
       }
-      const data = await response.json();
-      return data.fleet as VehicleRecord[];
+      const apiResponse = await response.json();
+      return apiResponse.data as VehicleRecord[];
     }, context);
   }
 
@@ -129,7 +129,8 @@ class PersistentFleetStorage {
       if (!response.ok) {
         throw new Error('Failed to add vehicle');
       }
-      const newVehicle = await response.json();
+      const apiResponse = await response.json();
+      const newVehicle = apiResponse.data;
       FleetEvents.vehicleAdded(newVehicle, 'persistentFleetStorage');
       this.notifyListeners();
       return newVehicle;
@@ -152,7 +153,8 @@ class PersistentFleetStorage {
       if (!response.ok) {
         throw new Error('Failed to update vehicle');
       }
-      const updatedVehicle = await response.json();
+      const apiResponse = await response.json();
+      const updatedVehicle = apiResponse.data;
       FleetEvents.vehicleUpdated(updatedVehicle, 'persistentFleetStorage');
       this.notifyListeners();
       return updatedVehicle;
@@ -174,7 +176,8 @@ class PersistentFleetStorage {
       if (!response.ok) {
         throw new Error('Failed to remove vehicle');
       }
-      const deletedVehicle = await response.json();
+      const apiResponse = await response.json();
+      const deletedVehicle = apiResponse.data;
       FleetEvents.vehicleDeleted(deletedVehicle.vin, 'persistentFleetStorage');
       this.notifyListeners();
     }, context);
@@ -192,8 +195,8 @@ class PersistentFleetStorage {
       if (!response.ok) {
         throw new Error('Failed to fetch drivers data');
       }
-      const data = await response.json();
-      return data.drivers as DriverRecord[];
+      const apiResponse = await response.json();
+      return apiResponse.data as DriverRecord[];
     }, context);
   }
 
@@ -213,7 +216,8 @@ class PersistentFleetStorage {
       if (!response.ok) {
         throw new Error('Failed to add driver');
       }
-      const newDriver = await response.json();
+      const apiResponse = await response.json();
+      const newDriver = apiResponse.data;
       this.notifyListeners();
       return newDriver;
     }, context);
@@ -235,7 +239,8 @@ class PersistentFleetStorage {
       if (!response.ok) {
         throw new Error('Failed to update driver');
       }
-      const updatedDriver = await response.json();
+      const apiResponse = await response.json();
+      const updatedDriver = apiResponse.data;
       this.notifyListeners();
       return updatedDriver;
     }, context);
