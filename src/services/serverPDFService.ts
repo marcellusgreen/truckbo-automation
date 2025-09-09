@@ -72,6 +72,7 @@ class ServerPDFService {
       const response = await fetch(`${serverUrl}/health`);
       const data = await response.json();
       console.log(`✅ Server health response:`, data);
+      console.log(`🔍 Health check details - status: ${data.status}, pdfProcessorReady: ${data.pdfProcessorReady}`);
       
       const isHealthy = data.status === 'ok' && data.pdfProcessorReady;
       
