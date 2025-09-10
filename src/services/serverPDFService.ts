@@ -128,7 +128,7 @@ class ServerPDFService {
 
       const endpoint = `${serverUrl}/api/v1/documents/process`;
       
-      console.log(`📍 PDF Processing endpoint: ${endpoint} (isProduction: ${isProduction})`);
+      console.log(`📍 PDF Processing endpoint: ${endpoint}`);
       
       const response = await fetch(endpoint, {
         method: 'POST',
