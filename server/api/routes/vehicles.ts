@@ -8,7 +8,7 @@ import { vehicleTransformer, ApiVehicleInput } from '../transformers/VehicleTran
 import { HttpStatus, ApiErrorCode, RequestContext } from '../types/apiTypes';
 import { VehicleRecord } from '../../../shared/types/vehicleTypes';
 import { logger } from '../../../shared/services/logger';
-import { persistentFleetStorage } from '../../../shared/services/mockFleetStorage';
+import { neonFleetStorage as persistentFleetStorage } from '../../../shared/services/neonFleetStorage';
 
 const router = Router();
 
