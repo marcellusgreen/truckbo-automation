@@ -9,6 +9,7 @@ import { eventBus, FleetEvents } from './eventBus';
 import { ExtractedVehicleData } from './documentProcessor';
 import { standardizeVehicleData, batchStandardizeVehicles } from '../utils/fieldStandardization';
 import { type StandardizedVehicle } from '../types/standardizedFields';
+import { authService } from './authService';
 
 // Enhanced vehicle type that combines all data sources
 export interface UnifiedVehicleData extends VehicleRecord {
@@ -267,6 +268,12 @@ class CentralizedFleetDataService {
    * Initialize data from all sources and unify
    */
   async initializeData(): Promise<void> {
+    // Check if user is authenticated before trying to load data
+    if (!authService.isAuthenticated()) {
+      console.log('🔒 User not authenticated, skipping data initialization');
+      return;
+    }
+
     if (this.isLoading) {
       console.log('🔄 Already loading data, skipping refresh');
       return;

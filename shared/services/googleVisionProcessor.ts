@@ -3,6 +3,7 @@
 
 import { ImageAnnotatorClient } from '@google-cloud/vision';
 import { logger, LogContext } from './logger';
+import { dataExtractor } from '../utils/dataExtractor';
 
 export interface GoogleVisionProcessingResult {
   success: boolean;
@@ -11,33 +12,7 @@ export interface GoogleVisionProcessingResult {
   confidence?: number;
   processingTime?: number;
   documentType?: 'registration' | 'insurance' | 'medical_certificate' | 'cdl_license' | 'inspection' | 'permit' | 'unknown';
-  extractedData?: {
-    vin?: string;
-    licensePlate?: string;
-    make?: string;
-    model?: string;
-    year?: string;
-    driverName?: string;
-    licenseNumber?: string;
-    licenseClass?: string;
-    endorsements?: string[];
-    issueDate?: string;
-    expirationDate?: string;
-    effectiveDate?: string;
-    policyNumber?: string;
-    insuranceCompany?: string;
-    coverageAmount?: string;
-    medicalExaminerName?: string;
-    medicalCertificateNumber?: string;
-    restrictions?: string[];
-    registrationNumber?: string;
-    state?: string;
-    ownerName?: string;
-    documentNumber?: string;
-    authority?: string;
-    status?: string;
-    rawText?: string;
-  };
+  extractedData?: any;
   fieldConfidence?: { [key: string]: number };
   dataQuality?: {
     isComplete: boolean;
@@ -101,7 +76,6 @@ export class GoogleVisionProcessor {
     });
 
     try {
-      // Check if we have Google Vision credentials
       const hasCredentials = this.checkCredentials();
       if (!hasCredentials) {
         return {
@@ -111,7 +85,6 @@ export class GoogleVisionProcessor {
         };
       }
 
-      // Process with Google Vision API
       const visionResult = await this.callGoogleVisionAPI(file, processingOptions);
       
       if (!visionResult.success) {
@@ -122,7 +95,6 @@ export class GoogleVisionProcessor {
         };
       }
 
-      // Extract structured data from the raw text
       const structuredResult = await this.extractStructuredData(visionResult.text || '', processingOptions.expectedDocumentType);
 
       const result: GoogleVisionProcessingResult = {
@@ -161,7 +133,6 @@ export class GoogleVisionProcessor {
   }
 
   private checkCredentials(): boolean {
-    // Check for Google Cloud credentials
     const hasProjectId = process.env.GOOGLE_CLOUD_PROJECT_ID || process.env.GCLOUD_PROJECT;
     const hasKeyFile = process.env.GOOGLE_APPLICATION_CREDENTIALS;
     const hasServiceAccount = process.env.GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY;
@@ -223,9 +194,6 @@ export class GoogleVisionProcessor {
   }
 
   private async extractStructuredData(text: string, expectedType?: string): Promise<Partial<GoogleVisionProcessingResult>> {
-    // Placeholder for structured data extraction logic
-    // This would contain the actual parsing logic for different document types
-    
     logger.debug('Extracting structured data from text', {
       ...this.context,
       operation: 'extractStructuredData'
@@ -234,23 +202,31 @@ export class GoogleVisionProcessor {
       expectedType
     });
 
-    return {
-      documentType: 'unknown',
-      extractedData: {
-        rawText: text
-      },
-      dataQuality: {
-        isComplete: false,
-        missingCriticalFields: [],
-        invalidFields: [],
-        qualityScore: 0.5
-      },
-      requiresReview: true,
-      autoApprovalRecommended: false,
-      processingNotes: ['Structured data extraction is a placeholder.']
-    };
+    const docType = expectedType || 'unknown';
+
+    if (docType === 'registration' || docType === 'insurance' || docType === 'unknown') {
+      const vehicleData = await dataExtractor.parseVehicleData(text, docType, 'server-processed');
+      return {
+        documentType: vehicleData.documentType,
+        extractedData: vehicleData,
+        requiresReview: vehicleData.needsReview,
+        processingNotes: vehicleData.processingNotes
+      };
+    } else if (docType === 'medical_certificate' || docType === 'cdl') {
+      const driverData = await dataExtractor.parseDriverData(text, docType, 'server-processed');
+      return {
+        documentType: driverData.documentType,
+        extractedData: driverData,
+        requiresReview: driverData.needsReview,
+        processingNotes: driverData.processingNotes
+      };
+    } else {
+      return {
+        documentType: 'unknown',
+        processingNotes: ['Could not determine document type for structured data extraction.']
+      };
+    }
   }
 }
 
-// Create and export singleton instance
 export const googleVisionProcessor = new GoogleVisionProcessor();
