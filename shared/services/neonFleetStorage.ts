@@ -24,10 +24,10 @@ class NeonFleetStorage implements FleetStorage {
     return res.rows[0] || null;
   }
 
-  async addVehicle(vehicle: Omit<VehicleRecord, 'id' | 'date_added' | 'last_updated'>): Promise<VehicleRecord> {
+  async addVehicle(vehicle: Omit<VehicleRecord, 'id' | 'dateAdded' | 'lastUpdated'>): Promise<VehicleRecord> {
     const { 
-      organization_id, vin, make, model, year, license_plate, truck_number, 
-      status, compliance_status, registration_expiry, insurance_expiry 
+      organizationId, vin, make, model, year, licensePlate, truckNumber, 
+      status, complianceStatus, registrationExpirationDate, insuranceExpirationDate 
     } = vehicle;
     
     const res = await query(
@@ -35,8 +35,8 @@ class NeonFleetStorage implements FleetStorage {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
        RETURNING *`,
       [
-        organization_id, vin, make, model, year, license_plate, truck_number, 
-        status, compliance_status, registration_expiry, insurance_expiry
+        organizationId, vin, make, model, year, licensePlate, truckNumber, 
+        status, complianceStatus, registrationExpirationDate, insuranceExpirationDate
       ]
     );
     return res.rows[0];
@@ -49,11 +49,11 @@ class NeonFleetStorage implements FleetStorage {
     }
 
     const currentVehicle = rows[0];
-    const newVehicle = { ...currentVehicle, ...updates, last_updated: new Date() };
+    const newVehicle = { ...currentVehicle, ...updates, lastUpdated: new Date().toISOString() };
 
     const { 
-      organization_id, vin, make, model, year, license_plate, truck_number, 
-      status, compliance_status, registration_expiry, insurance_expiry, last_updated
+      organizationId, vin, make, model, year, licensePlate, truckNumber, 
+      status, complianceStatus, registrationExpirationDate, insuranceExpirationDate, lastUpdated
     } = newVehicle;
 
     const res = await query(
@@ -62,8 +62,8 @@ class NeonFleetStorage implements FleetStorage {
         status = $8, compliance_status = $9, registration_expiry = $10, insurance_expiry = $11, last_updated = $12
        WHERE id = $13 RETURNING *`,
       [
-        organization_id, vin, make, model, year, license_plate, truck_number, 
-        status, compliance_status, registration_expiry, insurance_expiry, last_updated, id
+        organizationId, vin, make, model, year, licensePlate, truckNumber, 
+        status, complianceStatus, registrationExpirationDate, insuranceExpirationDate, lastUpdated, id
       ]
     );
     return res.rows[0];

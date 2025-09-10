@@ -212,10 +212,10 @@ export class GoogleVisionProcessor {
         requiresReview: vehicleData.needsReview,
         processingNotes: vehicleData.processingNotes
       };
-    } else if (docType === 'medical_certificate' || docType === 'cdl') {
-      const driverData = await dataExtractor.parseDriverData(text, docType, 'server-processed');
+    } else if (docType === 'medical_certificate' || docType === 'cdl_license') {
+      const driverData = await dataExtractor.parseDriverData(text, docType === 'cdl_license' ? 'cdl' : docType, 'server-processed');
       return {
-        documentType: driverData.documentType,
+        documentType: driverData.documentType === 'cdl' ? 'cdl_license' : driverData.documentType as any,
         extractedData: driverData,
         requiresReview: driverData.needsReview,
         processingNotes: driverData.processingNotes

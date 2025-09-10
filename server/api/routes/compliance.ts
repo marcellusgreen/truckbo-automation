@@ -9,7 +9,7 @@ import { VehicleRecord } from '../../../shared/types/vehicleTypes';
 import { vehicleTransformer } from '../transformers/VehicleTransformer';
 import { logger } from '../../../shared/services/logger';
 import { apiManager } from '../../../shared/services/apiManager';
-import { persistentFleetStorage } from '../../../shared/services/mockFleetStorage';
+import { persistentFleetStorage } from '../../../shared/services/neonFleetStorage';
 
 const router = Router();
 
