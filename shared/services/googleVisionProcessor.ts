@@ -1,6 +1,7 @@
 // Google Vision Processor - Environment Agnostic
 // Handles document processing using Google Vision API
 
+import { ImageAnnotatorClient } from '@google-cloud/vision';
 import { logger, LogContext } from './logger';
 
 export interface GoogleVisionProcessingResult {
@@ -69,10 +70,15 @@ export interface GoogleVisionProcessingResult {
  * Server-side Google Vision processor that uses the Google Vision API directly
  */
 export class GoogleVisionProcessor {
+  private readonly visionClient: ImageAnnotatorClient;
   private readonly context: LogContext = {
     layer: 'processor',
     component: 'GoogleVisionProcessor'
   };
+
+  constructor() {
+    this.visionClient = new ImageAnnotatorClient();
+  }
 
   async processDocument(file: File | Buffer, options?: {
     maxRetries?: number;
@@ -170,20 +176,41 @@ export class GoogleVisionProcessor {
     confidence?: number;
   }> {
     try {
-      // This would be implemented with the actual Google Vision client library
-      // For now, return a placeholder response
-      logger.warn('Google Vision API not implemented - using placeholder', {
+      const content = file instanceof File ? Buffer.from(await file.arrayBuffer()) : file;
+
+      const request = {
+        image: {
+          content: content.toString('base64')
+        },
+        features: [{
+          type: 'DOCUMENT_TEXT_DETECTION'
+        }]
+      };
+
+      logger.info('Calling Google Vision API', {
         ...this.context,
         operation: 'callGoogleVisionAPI'
       });
 
-      // Simulate processing delay
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      const [result] = await this.visionClient.documentTextDetection(request);
+      const annotation = result.fullTextAnnotation;
 
-      return {
-        success: false,
-        error: 'Google Vision API not implemented in this version'
-      };
+      if (annotation?.text) {
+        return {
+          success: true,
+          text: annotation.text,
+          confidence: annotation.pages?.[0]?.confidence || 0.9
+        };
+      } else {
+        logger.warn('Google Vision API returned no text annotation', {
+          ...this.context,
+          operation: 'callGoogleVisionAPI'
+        }, { result });
+        return {
+          success: false,
+          error: 'No text found in document by Google Vision API.'
+        };
+      }
 
     } catch (error) {
       logger.error('Google Vision API call failed', {
@@ -223,7 +250,7 @@ export class GoogleVisionProcessor {
       },
       requiresReview: true,
       autoApprovalRecommended: false,
-      processingNotes: ['Document processing not fully implemented']
+      processingNotes: ['Structured data extraction is a placeholder.']
     };
   }
 }
