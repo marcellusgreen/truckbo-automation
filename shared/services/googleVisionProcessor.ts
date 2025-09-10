@@ -181,10 +181,7 @@ export class GoogleVisionProcessor {
       const request = {
         image: {
           content: content.toString('base64')
-        },
-        features: [{
-          type: 'DOCUMENT_TEXT_DETECTION'
-        }]
+        }
       };
 
       logger.info('Calling Google Vision API', {
