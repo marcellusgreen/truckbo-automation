@@ -72,10 +72,12 @@ class ServerPDFService {
       const response = await fetch(`${serverUrl}/health`);
       const data = await response.json();
       console.log(`✅ Server health response:`, data);
-      console.log(`🔍 Health check details - status: ${data.status}, pdfProcessorReady: ${data.pdfProcessorReady}`);
+      const healthData = data.data;
+      console.log(`🔍 Health check details - status: ${healthData?.status}, pdfProcessorReady: ${healthData?.pdfProcessorReady}`);
       
-      const isHealthy = (data.status === 'ok' || data.status === 'success') && 
-                       (data.pdfProcessorReady === true || data.pdfProcessorReady === undefined);
+      const isHealthy = data.status === 'success' && 
+                       healthData?.status === 'healthy' && 
+                       healthData?.pdfProcessorReady === true;
       
       if (!isHealthy && this.currentServer) {
         // Mark current server as unhealthy and clear it

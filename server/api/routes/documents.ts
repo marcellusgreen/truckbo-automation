@@ -11,16 +11,12 @@ import { googleVisionProcessor } from '../../../shared/services/googleVisionProc
 import multer from 'multer';
 import path from 'path';
 
-import fs from 'fs';
-
 const router = Router();
 
-// Configure multer for file uploads
-const uploadDir = '/tmp/uploads';
-fs.mkdirSync(uploadDir, { recursive: true });
-
+// Configure multer for in-memory file uploads
+const storage = multer.memoryStorage();
 const upload = multer({
-  dest: uploadDir,
+  storage: storage,
   limits: {
     fileSize: 50 * 1024 * 1024, // 50MB limit
     files: 10 // Maximum 10 files per request
