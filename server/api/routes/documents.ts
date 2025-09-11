@@ -419,7 +419,8 @@ router.post('/v1/documents/process',
         // All failed
         throw ApiError.processing(
           'All document processing failed',
-          'Unable to process any of the uploaded documents'
+          'Unable to process any of the uploaded documents',
+          { errors: results.map(r => r.errors).flat() }
         );
       }
 
@@ -606,6 +607,12 @@ function storeDocumentProcessingResult(result: DocumentProcessingResult): void {
     documentId: result.documentId,
     status: result.status,
     result: result,
+    submittedAt: now,
+    completedAt: result.status === 'processed' ? now : undefined
+  });
+}
+
+export default router;result,
     submittedAt: now,
     completedAt: result.status === 'processed' ? now : undefined
   });
