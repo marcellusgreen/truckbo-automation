@@ -9,7 +9,8 @@ import { VehicleRecord } from '../../../shared/types/vehicleTypes';
 import { vehicleTransformer } from '../transformers/VehicleTransformer';
 import { logger } from '../../../shared/services/logger';
 import { apiManager } from '../../../shared/services/apiManager';
-import { persistentFleetStorage } from '../../../shared/services/neonFleetStorage';
+import { neonFleetStorage } from '../../../shared/services/neonFleetStorage';
+import { reconcilerAPI } from '../../../Google Review Files/5_reconcilerAPI';
 
 const router = Router();
 
@@ -93,7 +94,7 @@ router.get('/v1/compliance/expiring', asyncHandler(async (req: Request, res: Res
     });
 
     // Get all vehicles and analyze compliance
-    const allVehicles = await persistentFleetStorage.getAllVehicles();
+    const allVehicles = await neonFleetStorage.getAllVehicles();
     const complianceItems: ComplianceItem[] = [];
     
     const now = new Date();
@@ -258,7 +259,7 @@ router.get('/v1/compliance/summary', asyncHandler(async (req: Request, res: Resp
     }, { statusFilter: status });
 
     // Get all vehicles and calculate compliance summary
-    const allVehicles = await persistentFleetStorage.getAllVehicles();
+    const allVehicles = await neonFleetStorage.getAllVehicles();
     let filteredVehicles = allVehicles;
     
     if (status) {
@@ -395,7 +396,7 @@ router.get('/v1/compliance/vehicle/:id', asyncHandler(async (req: Request, res: 
       userId: context.userId
     }, { vehicleId: id });
 
-    const vehicle = await persistentFleetStorage.getVehicle(id);
+    const vehicle = await neonFleetStorage.getVehicle(id);
     if (!vehicle) {
       throw ApiError.notFound('Vehicle', id);
     }
@@ -526,7 +527,7 @@ router.post('/v1/compliance/refresh/:id', asyncHandler(async (req: Request, res:
       userId: context.userId
     }, { vehicleId: id });
 
-    const vehicle = await persistentFleetStorage.getVehicle(id);
+    const vehicle = await neonFleetStorage.getVehicle(id);
     if (!vehicle) {
       throw ApiError.notFound('Vehicle', id);
     }

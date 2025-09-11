@@ -373,8 +373,8 @@ export class VehicleReconciler {
     });
 
     return expiringSoon.sort((a, b) => 
-      Math.min(...a.expiringDocuments.map(d => d.daysUntilExpiry)) - 
-      Math.min(...b.expiringDocuments.map(d => d.daysUntilExpiry))
+      Math.min(...a.expiringDocuments.map((d: { daysUntilExpiry: number }) => d.daysUntilExpiry)) - 
+      Math.min(...b.expiringDocuments.map((d: { daysUntilExpiry: number }) => d.daysUntilExpiry))
     );
   }
 
@@ -738,7 +738,7 @@ export class VehicleReconciler {
     };
     
     // Also check filename for document type clues
-    const fileName = documentData.fileName || metadata.fileName || '';
+    const fileName = documentData.fileName || '';
     const fileNameLower = fileName.toLowerCase();
     
     let inferredFromFileName: string | null = null;
@@ -927,7 +927,7 @@ export class VehicleReconciler {
     const now = new Date().toISOString();
     
     // Map document types to compliance categories
-    const complianceMapping: { [key: string]: keyof typeof vehicle.complianceStatus } = {
+    const complianceMapping: { [key: string]: 'registration' | 'insurance' | 'inspection' | 'cdl' | 'medical' } = {
       'registration': 'registration',
       'insurance': 'insurance',
       'inspection': 'inspection',

@@ -3,7 +3,7 @@
  * Provides easy access to vehicle reconciliation functionality with caching and error handling
  */
 
-import { vehicleReconciler, type VehicleRecord, type ReconcilerStats } from './vehicleReconciler';
+import { vehicleReconciler, type VehicleRecord, type ReconcilerStats } from '../src/services/vehicleReconciler';
 
 export interface VehicleSummaryView {
   vin: string;
@@ -352,7 +352,7 @@ class ReconcilerAPI {
     vehicleSummary?: VehicleSummaryView;
   }> {
     try {
-      const result = vehicleReconciler.addDocument(documentData, metadata);
+      const result = await vehicleReconciler.addDocument(documentData, metadata);
       
       if (result.success && result.vehicleVIN) {
         const vehicleSummary = this.getVehicleSummaryView(result.vehicleVIN);
