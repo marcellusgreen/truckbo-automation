@@ -43,22 +43,26 @@ app.use((0, cors_1.default)({
 }));
 // Compression middleware
 app.use((0, compression_1.default)());
-// Body parsing middleware
+// Body parsing middleware - only for JSON content type
 app.use(express_1.default.json({
     limit: '10mb',
+    type: 'application/json',
     verify: (req, res, buf) => {
-        // Verify JSON payload
-        try {
-            JSON.parse(buf.toString());
-        }
-        catch (e) {
-            throw new Error('Invalid JSON payload');
+        // Only verify JSON if there's actually content
+        if (buf.length > 0) {
+            try {
+                JSON.parse(buf.toString());
+            }
+            catch (e) {
+                throw new Error('Invalid JSON payload');
+            }
         }
     }
 }));
 app.use(express_1.default.urlencoded({
     extended: true,
-    limit: '10mb'
+    limit: '10mb',
+    type: 'application/x-www-form-urlencoded'
 }));
 // Request context middleware (must be early in chain)
 app.use(errorHandling_1.requestContext);
@@ -258,19 +262,17 @@ process.on('unhandledRejection', (reason, promise) => {
     process.exit(1);
 });
 exports.default = app;
-// Start server if this file is run directly
-if (require.main === module) {
-    const PORT = process.env.PORT || 3001;
-    app.listen(PORT, () => {
-        logger_1.logger.info(`API server started on port ${PORT}`, {
-            layer: 'api',
-            component: 'Application',
-            operation: 'startup'
-        }, {
-            port: PORT,
-            environment: process.env.NODE_ENV || 'development',
-            nodeVersion: process.version,
-            apiVersion: process.env.API_VERSION || '1.0.0'
-        });
+// Start server 
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => {
+    logger_1.logger.info(`API server started on port ${PORT}`, {
+        layer: 'api',
+        component: 'Application',
+        operation: 'startup'
+    }, {
+        port: PORT,
+        environment: process.env.NODE_ENV || 'development',
+        nodeVersion: process.version,
+        apiVersion: process.env.API_VERSION || '1.0.0'
     });
-}
+});

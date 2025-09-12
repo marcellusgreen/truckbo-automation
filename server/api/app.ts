@@ -53,9 +53,10 @@ app.use(cors({
 // Compression middleware
 app.use(compression());
 
-// Body parsing middleware
+// Body parsing middleware - only for JSON content type
 app.use(express.json({ 
   limit: '10mb',
+  type: 'application/json',
   verify: (req, res, buf) => {
     // Only verify JSON if there's actually content
     if (buf.length > 0) {
@@ -70,7 +71,8 @@ app.use(express.json({
 
 app.use(express.urlencoded({ 
   extended: true, 
-  limit: '10mb' 
+  limit: '10mb',
+  type: 'application/x-www-form-urlencoded'
 }));
 
 // Request context middleware (must be early in chain)
