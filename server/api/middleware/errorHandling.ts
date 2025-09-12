@@ -95,12 +95,13 @@ export class ApiError extends Error {
     );
   }
 
-  static processing(message: string, userMessage?: string): ApiError {
+  static processing(message: string, userMessage?: string, details?: any): ApiError {
     return new ApiError(
       HttpStatus.UNPROCESSABLE_ENTITY,
       ApiErrorCode.PROCESSING_FAILED,
       message,
-      userMessage || 'Processing failed. Please try again'
+      userMessage || 'Processing failed. Please try again',
+      details
     );
   }
 

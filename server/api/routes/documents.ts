@@ -612,10 +612,4 @@ function storeDocumentProcessingResult(result: DocumentProcessingResult): void {
   });
 }
 
-export default router;result,
-    submittedAt: now,
-    completedAt: result.status === 'processed' ? now : undefined
-  });
-}
-
 export default router;
