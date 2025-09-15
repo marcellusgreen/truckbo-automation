@@ -70,13 +70,11 @@ class ApiTester {
   private server: any;
 
   constructor() {
-    console.log('🧪 API Test Suite Initializing...
-');
+    console.log('🧪 API Test Suite Initializing...');
   }
 
   async runAllTests(): Promise<void> {
-    console.log('🚀 Starting API Tests
-');
+    console.log('🚀 Starting API Tests');
     
     try {
       await this.startApiServer();
@@ -105,8 +103,7 @@ class ApiTester {
       this.server = app.listen(0, () => {
         const port = this.server.address().port;
         process.env.TEST_SERVER_PORT = String(port);
-        console.log(`✅ Test API server started on port ${port}
-`);
+        console.log(`✅ Test API server started on port ${port}`);
       });
     } catch (error) {
       console.error('❌ Failed to start API server:', error);
@@ -123,8 +120,7 @@ class ApiTester {
       try {
         const response = await fetch(`http://localhost:${port}/health`);
         if (response.ok) {
-          console.log('✅ Server is ready
-');
+          console.log('✅ Server is ready');
           return;
         }
       } catch { /* Ignore */ }
@@ -135,8 +131,7 @@ class ApiTester {
 
   private async stopApiServer(): Promise<void> {
     if (this.server) {
-      console.log('
-🔧 Stopping test server...');
+      console.log('\n🔧 Stopping test server...');
       return new Promise(resolve => this.server.close(resolve));
     }
   }
@@ -226,32 +221,25 @@ class ApiTester {
   }
 
   private generateReport(): void {
-    console.log('
-' + '='.repeat(60));
+    console.log('\n' + '='.repeat(60));
     console.log('🎯 API TEST REPORT');
     console.log('='.repeat(60));
     const passed = this.results.filter(r => r.status === 'pass').length;
     const failed = this.results.filter(r => r.status === 'fail').length;
     if (failed > 0) {
-      console.log(`
-❌ Failed Tests:
-`);
+      console.log(`\n❌ Failed Tests:\n`);
       this.results.filter(r => r.status === 'fail').forEach(test => {
         console.log(`  • ${test.name}: ${test.error}`);
       });
     }
-    console.log(`
-Overall Results: ✅ Passed: ${passed}, ❌ Failed: ${failed}`);
+    console.log(`\nOverall Results: ✅ Passed: ${passed}, ❌ Failed: ${failed}`);
     if (failed === 0) {
-      console.log(`
-🎉 All tests passed!`);
+      console.log(`\n🎉 All tests passed!`);
     } else {
-      console.log(`
-⚠️  Some tests failed. Please review issues.`);
+      console.log(`\n⚠️  Some tests failed. Please review issues.`);
       process.exit(1); // Exit with failure code if any test fails
     }
-    console.log('
-' + '='.repeat(60));
+    console.log('\n' + '='.repeat(60));
   }
 }
 
