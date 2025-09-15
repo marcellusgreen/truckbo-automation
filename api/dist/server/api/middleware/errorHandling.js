@@ -70,8 +70,8 @@ class ApiError extends Error {
     static validation(validationErrors, userMessage) {
         return new ApiError(apiTypes_1.HttpStatus.UNPROCESSABLE_ENTITY, apiTypes_1.ApiErrorCode.VALIDATION_ERROR, 'Validation failed', userMessage || 'Please check your input and try again', { validation: validationErrors });
     }
-    static processing(message, userMessage) {
-        return new ApiError(apiTypes_1.HttpStatus.UNPROCESSABLE_ENTITY, apiTypes_1.ApiErrorCode.PROCESSING_FAILED, message, userMessage || 'Processing failed. Please try again');
+    static processing(message, userMessage, details) {
+        return new ApiError(apiTypes_1.HttpStatus.UNPROCESSABLE_ENTITY, apiTypes_1.ApiErrorCode.PROCESSING_FAILED, message, userMessage || 'Processing failed. Please try again', details);
     }
     static timeout(operation, timeoutMs) {
         return new ApiError(apiTypes_1.HttpStatus.GATEWAY_TIMEOUT, apiTypes_1.ApiErrorCode.TIMEOUT, `${operation} timed out after ${timeoutMs}ms`, 'The request took too long to process. Please try again');
@@ -303,6 +303,7 @@ const healthCheck = (req, res) => {
             storage: { status: 'up', lastCheck: new Date().toISOString() },
             logging: { status: 'up', lastCheck: new Date().toISOString() }
         },
+        pdfProcessorReady: true,
         metrics: {
             memoryUsage: process.memoryUsage(),
             cpuUsage: process.cpuUsage(),

@@ -8,7 +8,7 @@ const errorHandling_1 = require("../middleware/errorHandling");
 const apiTypes_1 = require("../types/apiTypes");
 const VehicleTransformer_1 = require("../transformers/VehicleTransformer");
 const logger_1 = require("../../../shared/services/logger");
-const mockFleetStorage_1 = require("../../../shared/services/mockFleetStorage");
+const neonFleetStorage_1 = require("../../../shared/services/neonFleetStorage");
 const router = (0, express_1.Router)();
 // Apply request context middleware to all routes
 router.use(errorHandling_1.requestContext);
@@ -36,7 +36,7 @@ router.get('/v1/compliance/expiring', (0, errorHandling_1.asyncHandler)(async (r
             sorting: { sortBy, sortOrder }
         });
         // Get all vehicles and analyze compliance
-        const allVehicles = await mockFleetStorage_1.persistentFleetStorage.getAllVehicles();
+        const allVehicles = await neonFleetStorage_1.neonFleetStorage.getAllVehicles();
         const complianceItems = [];
         const now = new Date();
         const cutoffDate = new Date(now.getTime() + (daysAhead * 24 * 60 * 60 * 1000));
@@ -176,7 +176,7 @@ router.get('/v1/compliance/summary', (0, errorHandling_1.asyncHandler)(async (re
             userId: context.userId
         }, { statusFilter: status });
         // Get all vehicles and calculate compliance summary
-        const allVehicles = await mockFleetStorage_1.persistentFleetStorage.getAllVehicles();
+        const allVehicles = await neonFleetStorage_1.neonFleetStorage.getAllVehicles();
         let filteredVehicles = allVehicles;
         if (status) {
             filteredVehicles = allVehicles.filter((v) => v.status === status);
@@ -297,7 +297,7 @@ router.get('/v1/compliance/vehicle/:id', (0, errorHandling_1.asyncHandler)(async
             requestId: context.requestId,
             userId: context.userId
         }, { vehicleId: id });
-        const vehicle = await mockFleetStorage_1.persistentFleetStorage.getVehicle(id);
+        const vehicle = await neonFleetStorage_1.neonFleetStorage.getVehicle(id);
         if (!vehicle) {
             throw errorHandling_1.ApiError.notFound('Vehicle', id);
         }
@@ -406,7 +406,7 @@ router.post('/v1/compliance/refresh/:id', (0, errorHandling_1.asyncHandler)(asyn
             requestId: context.requestId,
             userId: context.userId
         }, { vehicleId: id });
-        const vehicle = await mockFleetStorage_1.persistentFleetStorage.getVehicle(id);
+        const vehicle = await neonFleetStorage_1.neonFleetStorage.getVehicle(id);
         if (!vehicle) {
             throw errorHandling_1.ApiError.notFound('Vehicle', id);
         }

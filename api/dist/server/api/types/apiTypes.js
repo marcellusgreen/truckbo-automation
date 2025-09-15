@@ -9,6 +9,7 @@ var HttpStatus;
     // Success
     HttpStatus[HttpStatus["OK"] = 200] = "OK";
     HttpStatus[HttpStatus["CREATED"] = 201] = "CREATED";
+    HttpStatus[HttpStatus["ACCEPTED"] = 202] = "ACCEPTED";
     HttpStatus[HttpStatus["NO_CONTENT"] = 204] = "NO_CONTENT";
     // Client Errors
     HttpStatus[HttpStatus["BAD_REQUEST"] = 400] = "BAD_REQUEST";

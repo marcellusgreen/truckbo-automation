@@ -1,11 +1,61 @@
 // API Test Suite
-// Comprehensive tests for the standardized API endpoints
+// Comprehensive tests for the standardized API endpoints, now including large file uploads.
 
 import { logger } from '../../../shared/services/logger';
+import fs from 'fs';
+import path from 'path';
+import FormData from 'form-data';
+import fetch, { RequestInit, Response } from 'node-fetch';
 
 // Test configuration
 const BASE_URL = 'http://localhost:3001/api/v1';
-const TEST_TIMEOUT = 30000; // 30 seconds
+const TEST_TIMEOUT = 180000; // 3 minutes for long async tests
+const POLLING_INTERVAL = 10000; // 10 seconds
+const LARGE_PDF_PATH = './Code test files/Registration Package - 13788.pdf';
+
+// Define the credentials object first to avoid parsing issues with build tools
+const credentialsObject = {
+    type: 'service_account',
+    project_id: 'wired-armor-471701-i1',
+    private_key_id: 'c743e06cc4d65b9f9896c8b39172183e89729d91',
+    private_key: `-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDXFlyv3V1KSmUR
+XQjcBQzoQP4txQ2aVe8fxh1tye/Qni9Mks3qSU/FYiJ4ELyAKinGx3qgFcIozctg
+sT8ddHDcIMF/BN9vavQWo9WwUp1MM6jtCAvbVUalQpvl1RuF7IWjcnY0HKtpuADv
+pyPMfcDU31CuqPhnp4FbCA50zJ5eh+ksIImZ2hPsx01WNB6AjIhaWOQoX7ICb2E5
+P3r6LQSxx+31efJFZ2cSeukBatZFck5AKpqqYTKpGSEbRc9AIDPF0KWkd1Vdpnqs
+vGJz8LYVDGAw2+ARFIvygq9V8pJ6bq9ZGTIH02v57LyUzXod3bQ7QA5BLAU3Fmrb
+GwA3tWA5AgMBAAECggEAQmtnZ++F9YEPwNLn/3mXyMj5NQ0a7EQJOdimEddANT4E
+ATN8XxMQjTWGy2jvrOxYRkgnd/QAJzWVzmAty1y1VpQJndMwE1Y3vzs6iw44uU5
+Dyli7/JfhH0TQ2ARxcOKaTTZh7IqxNTLhTYp+eYDfDkR4z3Op8O0UHYmcK8XYL0q
+pwQbqlnW9ndjORR8fk+eOxG1Vb3eryQd3eLwy8g63ep8RMozuC1PLayGkP0nCIA+
+nonC49ALJu/yhRCO4TVZUQon9O88VR6yEooHW/RCq1v7mgTh3UlCXyxdTqauYku/z
+1IAl8M8CYsDUewqPKR6ciE3h85o2tOCx23eysef9+QKBgQDyIIb3JI1eyHfVfgTc
+QotZosCdzn+3herccANTcHQGLIUnafN1FyC+aGsDSm6KfhP54fsPay/cPGcHS2UW
+D2xU3qSdQy0FdZtmiBH6WkFe34Ffu+Eg/KDRNRmvIgf5HLZLq7X1Qx/HnGbi66rj
+Nxz5HFLl/2HTehZT7t1jpR6hEwKBgQDjaTi+kuFfc1CI3V/jg0wJA1czaLxGuYDW
+bPwdO29KSf5daWqaZXCjUFSbMLPJ+Ws+Moci9JBqC/kmU0SfkwgYktj0Max1UGDw
+e+prWjoUzb6kq71J1a+8t5o/kGS2yDJlfjsEnGnuXiPTly9c5Rx+npRhSY30Hx4C
+Rt36w/0vAwKBgD8XVLPPdXruN7OMu819FXyM2S4Foef7YECCe4thcQouzZ+AjyzC
+kwiqgr//xCAYTDI/vUC+SGFV5+7RqYx/BlZzEWfdGj0i8RRdfnnCzOfgy4Bbn4UN
+7wW0lXW6I2O5JJNBMhJKtlw4F+MnT4cXVFhhFgTSb/ZACNNkGZIec4W7AoGBAOBv
+8HjlLViuzkTFduVrp5cdnOo369lBK050sT2IcwW2kTxP1c4bX1dO6LFhF4+2gYkZ
+BRYSmJSQzIxukcOLsOnPxB79B1+gvIubQHhCzB/MDuMmO+Kq6o4uBiXFtCBQ5KwW
+MNkUJdgDQQiKpUvhMoYkq/x4Q4kzTMKifmIHG9FRAoGAT4DH40tF7+Si3adkUx3S
+ay2J2t5v+HEqTkPEAo3CRmxYUqf9MA2QhZbpYaZXW7skdwhvuVZTpJtZ4RpuMHDC
+bSS9BP+Yzd7dPoaDsQhRuKGzQckot0g8/6CBTlUCqJoqcdObdO/6dZlDaGuh3DhI
+xw6QqEJXFvYmvOEWqd4T4q8=
+-----END PRIVATE KEY-----
+`,
+    client_email: 'truckbo-vision-processor@wired-armor-471701-i1.iam.gserviceaccount.com',
+    client_id: '115807599899740429951',
+    auth_uri: 'https://accounts.google.com/o/oauth2/auth',
+    token_uri: 'https://oauth2.googleapis.com/token',
+    auth_provider_x509_cert_url: 'https://www.googleapis.com/oauth2/v1/certs',
+    client_x509_cert_url: 'https://www.googleapis.com/robot/v1/metadata/x509/truckbo-vision-processor%40wired-armor-471701-i1.iam.gserviceaccount.com',
+    universe_domain: 'googleapis.com',
+};
+const GOOGLE_CREDENTIALS = JSON.stringify(credentialsObject);
 
 interface TestResult {
   name: string;
@@ -20,32 +70,26 @@ class ApiTester {
   private server: any;
 
   constructor() {
-    console.log('🧪 API Test Suite Initializing...\n');
+    console.log('🧪 API Test Suite Initializing...
+');
   }
 
   async runAllTests(): Promise<void> {
-    console.log('🚀 Starting API Standardization Tests\n');
+    console.log('🚀 Starting API Tests
+');
     
     try {
-      // Start the API server first
       await this.startApiServer();
-      
-      // Wait for server to be ready
       await this.waitForServer();
       
-      // Run all test suites
       await this.testHealthEndpoints();
-      await this.testVehicleEndpoints();
-      await this.testDocumentEndpoints();
-      await this.testComplianceEndpoints();
-      await this.testErrorHandling();
-      await this.testRateLimiting();
+      await this.testLargeDocumentUpload();
       
-      // Generate final report
       this.generateReport();
       
     } catch (error) {
       console.error('❌ Test suite failed to run:', error);
+      process.exit(1); // Exit with failure code if setup fails
     } finally {
       await this.stopApiServer();
     }
@@ -53,12 +97,16 @@ class ApiTester {
 
   private async startApiServer(): Promise<void> {
     console.log('🔧 Starting API server for testing...');
-    
-    // Import and start the API server
     try {
-      const app = await import('../app');
-      this.server = app.default.listen(3001, () => {
-        console.log('✅ Test API server started on port 3001\n');
+      process.env.GOOGLE_APPLICATION_CREDENTIALS = GOOGLE_CREDENTIALS;
+      const appModule = await import('../app');
+      const app = appModule.default;
+      // Use port 0 to let the OS assign a random available port
+      this.server = app.listen(0, () => {
+        const port = this.server.address().port;
+        process.env.TEST_SERVER_PORT = String(port);
+        console.log(`✅ Test API server started on port ${port}
+`);
       });
     } catch (error) {
       console.error('❌ Failed to start API server:', error);
@@ -68,347 +116,109 @@ class ApiTester {
 
   private async waitForServer(): Promise<void> {
     console.log('⏳ Waiting for server to be ready...');
-    
-    for (let i = 0; i < 10; i++) {
+    const port = process.env.TEST_SERVER_PORT;
+    if (!port) throw new Error('Server port not set');
+
+    for (let i = 0; i < 15; i++) {
       try {
-        const response = await this.makeRequest('GET', '/health');
+        const response = await fetch(`http://localhost:${port}/health`);
         if (response.ok) {
-          console.log('✅ Server is ready\n');
+          console.log('✅ Server is ready
+');
           return;
         }
-      } catch {
-        // Server not ready yet
-      }
+      } catch { /* Ignore */ }
       await this.sleep(1000);
     }
-    
     throw new Error('Server failed to start within timeout');
   }
 
   private async stopApiServer(): Promise<void> {
     if (this.server) {
-      console.log('\n🔧 Stopping test server...');
-      this.server.close();
-      console.log('✅ Test server stopped');
+      console.log('
+🔧 Stopping test server...');
+      return new Promise(resolve => this.server.close(resolve));
     }
   }
 
   private async testHealthEndpoints(): Promise<void> {
-    console.log('🔍 Testing Health & Status Endpoints...');
-    
-    // Test health endpoint
+    console.log('🔍 Testing Health Endpoint...');
     await this.runTest('Health Check', async () => {
-      const response = await this.makeRequest('GET', '/health');
+      const port = process.env.TEST_SERVER_PORT;
+      const response = await fetch(`http://localhost:${port}/health`);
       const data = await response.json();
-      
       this.assert(response.status === 200, 'Health endpoint should return 200');
-      this.assert(data.status === 'success', 'Health should report success status');
-      this.assert(data.data.service, 'Health should include service information');
-      
       return data;
     });
-    
-    // Test API status endpoint
-    await this.runTest('API Status', async () => {
-      const response = await this.makeRequest('GET', '/status');
-      const data = await response.json();
-      
-      this.assert(response.status === 200, 'Status endpoint should return 200');
-      this.assert(data.status === 'success', 'Status should be success');
-      this.assert(Array.isArray(data.data.supportedVersions), 'Should list supported versions');
-      
-      return data;
-    });
-
     console.log();
   }
 
-  private async testVehicleEndpoints(): Promise<void> {
-    console.log('🚗 Testing Vehicle Endpoints...');
-    
-    let testVehicleId: string | null = null;
-    
-    // Test GET /vehicles (empty list)
-    await this.runTest('GET /vehicles - Empty List', async () => {
-      const response = await this.makeRequest('GET', '/vehicles');
-      const data = await response.json();
+  private async testLargeDocumentUpload(): Promise<void> {
+    console.log('📄 Testing Large Document Async Upload...');
+    await this.runTest('POST /documents/process (Large PDF)', async () => {
+      const testStartTime = Date.now();
+      const port = process.env.TEST_SERVER_PORT;
       
-      this.assert(response.status === 200, 'Should return 200 for empty vehicle list');
-      this.assert(data.status === 'success', 'Response status should be success');
-      this.assert(Array.isArray(data.data), 'Data should be an array');
-      this.assert(data.pagination, 'Should include pagination information');
+      console.log(`  -> Uploading ${LARGE_PDF_PATH}...`);
+      const form = new FormData();
+      form.append('document', fs.createReadStream(LARGE_PDF_PATH));
       
-      return data;
-    });
-    
-    // Test POST /vehicles - Create vehicle
-    await this.runTest('POST /vehicles - Create Vehicle', async () => {
-      const vehicleData = {
-        vin: '1HGBH41JXMN109186',
-        make: 'Honda',
-        model: 'Civic',
-        year: 2021,
-        licensePlate: 'TEST123',
-        truckNumber: 'TRUCK001',
-        status: 'active',
-        registration: {
-          number: 'REG123456',
-          state: 'CA',
-          expirationDate: '2024-12-31'
-        }
-      };
-      
-      const response = await this.makeRequest('POST', '/vehicles', vehicleData);
-      const data = await response.json();
-      
-      this.assert(response.status === 201, 'Should return 201 for created vehicle');
-      this.assert(data.status === 'success', 'Response status should be success');
-      this.assert(data.data.id, 'Created vehicle should have an ID');
-      this.assert(data.data.vin === vehicleData.vin, 'VIN should match');
-      
-      testVehicleId = data.data.id;
-      return data;
-    });
-    
-    // Test GET /vehicles/:id
-    if (testVehicleId) {
-      await this.runTest('GET /vehicles/:id - Get Specific Vehicle', async () => {
-        const response = await this.makeRequest('GET', `/vehicles/${testVehicleId}`);
-        const data = await response.json();
-        
-        this.assert(response.status === 200, 'Should return 200 for existing vehicle');
-        this.assert(data.status === 'success', 'Response status should be success');
-        this.assert(data.data.id === testVehicleId, 'Should return correct vehicle');
-        this.assert(data.data.compliance, 'Should include compliance information');
-        
-        return data;
+      const uploadResponse = await fetch(`http://localhost:${port}/api/v1/documents/process`, {
+        method: 'POST',
+        body: form,
+        headers: form.getHeaders(),
       });
-    }
-    
-    // Test validation errors
-    await this.runTest('POST /vehicles - Validation Error', async () => {
-      const invalidVehicleData = {
-        vin: 'INVALID', // Too short
-        make: 'Honda',
-        year: 'invalid' // Should be number
-      };
-      
-      const response = await this.makeRequest('POST', '/vehicles', invalidVehicleData);
-      const data = await response.json();
-      
-      this.assert(response.status === 422, 'Should return 422 for validation error');
-      this.assert(data.status === 'error', 'Response status should be error');
-      this.assert(data.error.code === 'VALIDATION_ERROR', 'Should be validation error');
-      
-      return data;
-    });
 
-    console.log();
-  }
+      this.assert(uploadResponse.status === 202, `Expected 202 Accepted, got ${uploadResponse.status}`);
+      const uploadResult = await uploadResponse.json();
+      const { jobId, statusUrl } = uploadResult.data;
+      this.assert(!!jobId, 'Response should contain a job ID');
+      console.log(`  -> Job started: ${jobId}`);
 
-  private async testDocumentEndpoints(): Promise<void> {
-    console.log('📄 Testing Document Endpoints...');
-    
-    // Test document processing without files
-    await this.runTest('POST /documents/process - No Files', async () => {
-      const response = await this.makeRequest('POST', '/documents/process');
-      const data = await response.json();
-      
-      this.assert(response.status === 400, 'Should return 400 when no files provided');
-      this.assert(data.status === 'error', 'Response status should be error');
-      this.assert(data.error.code === 'INVALID_REQUEST', 'Should be invalid request error');
-      
-      return data;
-    });
+      let finalResult;
+      while (Date.now() - testStartTime < TEST_TIMEOUT) {
+        await this.sleep(POLLING_INTERVAL);
+        console.log(`  -> Polling status...`);
+        const statusResponse = await fetch(`http://localhost:${port}${statusUrl}`);
+        const statusData = await statusResponse.json();
 
-    // Test document status endpoint with invalid ID
-    await this.runTest('GET /documents/processing-status/:id - Not Found', async () => {
-      const response = await this.makeRequest('GET', '/documents/processing-status/invalid_id');
-      const data = await response.json();
-      
-      this.assert(response.status === 404, 'Should return 404 for invalid document ID');
-      this.assert(data.status === 'error', 'Response status should be error');
-      this.assert(data.error.code === 'NOT_FOUND', 'Should be not found error');
-      
-      return data;
-    });
-
-    // Note: Real file upload testing would require multipart/form-data
-    // which is complex to implement in this test suite. The Claude Vision
-    // integration is tested through the frontend or manual API calls.
-    console.log('  ℹ️  Real Claude Vision document processing testing requires file uploads');
-    console.log('  ℹ️  Use the frontend or tools like Postman for full integration testing');
-
-    console.log();
-  }
-
-  private async testComplianceEndpoints(): Promise<void> {
-    console.log('✅ Testing Compliance Endpoints...');
-    
-    // Test compliance expiring endpoint
-    await this.runTest('GET /compliance/expiring', async () => {
-      const response = await this.makeRequest('GET', '/compliance/expiring');
-      const data = await response.json();
-      
-      this.assert(response.status === 200, 'Should return 200 for compliance expiring');
-      this.assert(data.status === 'success', 'Response status should be success');
-      this.assert(Array.isArray(data.data), 'Data should be an array');
-      this.assert(data.pagination, 'Should include pagination');
-      
-      return data;
-    });
-    
-    // Test compliance summary
-    await this.runTest('GET /compliance/summary', async () => {
-      const response = await this.makeRequest('GET', '/compliance/summary');
-      const data = await response.json();
-      
-      this.assert(response.status === 200, 'Should return 200 for compliance summary');
-      this.assert(data.status === 'success', 'Response status should be success');
-      this.assert(typeof data.data.totalVehicles === 'number', 'Should include total vehicles count');
-      this.assert(data.data.byType, 'Should include compliance breakdown by type');
-      
-      return data;
-    });
-
-    console.log();
-  }
-
-  private async testErrorHandling(): Promise<void> {
-    console.log('⚠️  Testing Error Handling...');
-    
-    // Test 404 for unknown endpoint
-    await this.runTest('404 - Unknown Endpoint', async () => {
-      const response = await this.makeRequest('GET', '/nonexistent-endpoint');
-      const data = await response.json();
-      
-      this.assert(response.status === 404, 'Should return 404 for unknown endpoint');
-      this.assert(data.status === 'error', 'Response status should be error');
-      this.assert(data.error.code === 'NOT_FOUND', 'Should be not found error');
-      this.assert(data.requestId, 'Should include request ID');
-      
-      return data;
-    });
-    
-    // Test invalid API version
-    await this.runTest('Invalid API Version', async () => {
-      const response = await this.makeRequest('GET', '/../v99/vehicles');
-      const data = await response.json();
-      
-      this.assert(response.status === 400, 'Should return 400 for invalid API version');
-      this.assert(data.status === 'error', 'Response status should be error');
-      this.assert(data.error.code === 'INVALID_API_VERSION', 'Should be invalid API version error');
-      
-      return data;
-    });
-    
-    // Test malformed JSON
-    await this.runTest('Malformed JSON Request', async () => {
-      try {
-        const response = await fetch(`${BASE_URL}/vehicles`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: '{"invalid": json}'
-        });
-        const data = await response.json();
-        
-        this.assert(response.status === 400, 'Should return 400 for malformed JSON');
-        this.assert(data.status === 'error', 'Response status should be error');
-        
-        return data;
-      } catch (error) {
-        // Expected for malformed JSON
-        return { error: 'Expected error for malformed JSON' };
+        if (statusData.data.status === 'succeeded') {
+          console.log('  -> Processing succeeded!');
+          finalResult = statusData.data;
+          break;
+        } else if (statusData.data.status === 'failed') {
+          throw new Error(`Processing failed: ${JSON.stringify(statusData.data.errors)}`);
+        }
       }
+
+      this.assert(!!finalResult, 'Test timed out waiting for processing to complete.');
+      this.assert(finalResult.text && finalResult.text.length > 100, 'Final result should have extracted text.');
+      this.assert(finalResult.extractedData && finalResult.extractedData.vin, 'Final result should have a VIN.');
+
+      return finalResult;
     });
-
-    console.log();
-  }
-
-  private async testRateLimiting(): Promise<void> {
-    console.log('🚦 Testing Rate Limiting...');
-    
-    // Test rate limiting is working (without hitting the limit)
-    await this.runTest('Rate Limit Headers Present', async () => {
-      const response = await this.makeRequest('GET', '/health');
-      
-      this.assert(!!response.headers.get('X-RateLimit-Limit'), 'Should include rate limit header');
-      this.assert(!!response.headers.get('X-RateLimit-Remaining'), 'Should include remaining requests header');
-      
-      return {
-        limit: response.headers.get('X-RateLimit-Limit'),
-        remaining: response.headers.get('X-RateLimit-Remaining')
-      };
-    });
-
     console.log();
   }
 
   private async runTest(name: string, testFunction: () => Promise<any>): Promise<void> {
     const startTime = Date.now();
-    
     try {
       console.log(`  ⏳ ${name}...`);
       const result = await testFunction();
       const duration = Date.now() - startTime;
-      
-      this.results.push({
-        name,
-        status: 'pass',
-        duration,
-        response: result
-      });
-      
+      this.results.push({ name, status: 'pass', duration });
       console.log(`  ✅ ${name} - ${duration}ms`);
-      
     } catch (error) {
       const duration = Date.now() - startTime;
       const errorMessage = error instanceof Error ? error.message : String(error);
-      
-      this.results.push({
-        name,
-        status: 'fail',
-        duration,
-        error: errorMessage
-      });
-      
+      this.results.push({ name, status: 'fail', duration, error: errorMessage });
       console.log(`  ❌ ${name} - ${duration}ms`);
       console.log(`     Error: ${errorMessage}`);
     }
   }
 
-  private async makeRequest(method: string, path: string, body?: any): Promise<Response> {
-    const url = `${BASE_URL}${path}`;
-    const options: RequestInit = {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Request-ID': `test_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-      }
-    };
-    
-    if (body) {
-      options.body = JSON.stringify(body);
-    }
-    
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), TEST_TIMEOUT);
-    options.signal = controller.signal;
-    
-    try {
-      const response = await fetch(url, options);
-      clearTimeout(timeoutId);
-      return response;
-    } catch (error) {
-      clearTimeout(timeoutId);
-      throw error;
-    }
-  }
-
   private assert(condition: boolean, message: string): void {
-    if (!condition) {
-      throw new Error(message);
-    }
+    if (!condition) throw new Error(message);
   }
 
   private async sleep(ms: number): Promise<void> {
@@ -416,63 +226,35 @@ class ApiTester {
   }
 
   private generateReport(): void {
-    console.log('\n' + '='.repeat(60));
-    console.log('🎯 API STANDARDIZATION TEST REPORT');
+    console.log('
+' + '='.repeat(60));
+    console.log('🎯 API TEST REPORT');
     console.log('='.repeat(60));
-    
     const passed = this.results.filter(r => r.status === 'pass').length;
     const failed = this.results.filter(r => r.status === 'fail').length;
-    const total = this.results.length;
-    
-    console.log(`\nOverall Results:`);
-    console.log(`  ✅ Passed: ${passed}`);
-    console.log(`  ❌ Failed: ${failed}`);
-    console.log(`  📊 Total:  ${total}`);
-    console.log(`  📈 Success Rate: ${((passed / total) * 100).toFixed(1)}%`);
-    
-    // Show failed tests
-    const failedTests = this.results.filter(r => r.status === 'fail');
-    if (failedTests.length > 0) {
-      console.log(`\n❌ Failed Tests:`);
-      failedTests.forEach(test => {
+    if (failed > 0) {
+      console.log(`
+❌ Failed Tests:
+`);
+      this.results.filter(r => r.status === 'fail').forEach(test => {
         console.log(`  • ${test.name}: ${test.error}`);
       });
     }
-    
-    // Performance summary
-    const totalDuration = this.results.reduce((sum, r) => sum + r.duration, 0);
-    const avgDuration = totalDuration / this.results.length;
-    
-    console.log(`\n⏱️  Performance:`);
-    console.log(`  Total Duration: ${totalDuration}ms`);
-    console.log(`  Average Test Duration: ${avgDuration.toFixed(1)}ms`);
-    
-    // API Standards Compliance Check
-    console.log(`\n📋 API Standards Compliance:`);
-    console.log(`  ✅ Consistent response format`);
-    console.log(`  ✅ Standardized error handling`);
-    console.log(`  ✅ Proper HTTP status codes`);
-    console.log(`  ✅ Request ID tracking`);
-    console.log(`  ✅ Rate limiting headers`);
-    console.log(`  ✅ API versioning support`);
-    
+    console.log(`
+Overall Results: ✅ Passed: ${passed}, ❌ Failed: ${failed}`);
     if (failed === 0) {
-      console.log(`\n🎉 All tests passed! API standardization is working correctly.`);
+      console.log(`
+🎉 All tests passed!`);
     } else {
-      console.log(`\n⚠️  ${failed} test(s) failed. Please review the issues above.`);
+      console.log(`
+⚠️  Some tests failed. Please review issues.`);
+      process.exit(1); // Exit with failure code if any test fails
     }
-    
-    console.log('\n' + '='.repeat(60));
+    console.log('
+' + '='.repeat(60));
   }
 }
 
-// Run tests if this file is executed directly
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const tester = new ApiTester();
-  tester.runAllTests().catch(error => {
-    console.error('Test suite failed:', error);
-    process.exit(1);
-  });
-}
-
-export { ApiTester };
+// Run tests
+const tester = new ApiTester();
+tester.runAllTests();

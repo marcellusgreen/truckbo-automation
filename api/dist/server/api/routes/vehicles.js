@@ -8,7 +8,7 @@ const errorHandling_1 = require("../middleware/errorHandling");
 const VehicleTransformer_1 = require("../transformers/VehicleTransformer");
 const apiTypes_1 = require("../types/apiTypes");
 const logger_1 = require("../../../shared/services/logger");
-const mockFleetStorage_1 = require("../../../shared/services/mockFleetStorage");
+const neonFleetStorage_1 = require("../../../shared/services/neonFleetStorage");
 const router = (0, express_1.Router)();
 // Apply request context middleware to all routes
 router.use(errorHandling_1.requestContext);
@@ -37,7 +37,7 @@ router.get('/v1/vehicles', (0, errorHandling_1.asyncHandler)(async (req, res) =>
             sorting: { sortBy, sortOrder }
         });
         // Get vehicles from storage
-        const allVehicles = await mockFleetStorage_1.persistentFleetStorage.getAllVehicles();
+        const allVehicles = await neonFleetStorage_1.neonFleetStorage.getAllVehicles();
         if (!Array.isArray(allVehicles)) {
             throw errorHandling_1.ApiError.internal('Failed to retrieve vehicles from storage');
         }
@@ -103,7 +103,7 @@ router.get('/v1/vehicles/:id', (0, errorHandling_1.asyncHandler)(async (req, res
             userId: context.userId
         }, { vehicleId: id });
         // Get vehicle from storage
-        const vehicle = await mockFleetStorage_1.persistentFleetStorage.getVehicle(id);
+        const vehicle = await neonFleetStorage_1.neonFleetStorage.getVehicle(id);
         if (!vehicle) {
             throw errorHandling_1.ApiError.notFound('Vehicle', id);
         }
@@ -164,14 +164,14 @@ router.post('/v1/vehicles', (0, errorHandling_1.asyncHandler)(async (req, res) =
             userId: context.userId
         }, { vin: vehicleInput.vin, truckNumber: vehicleInput.truckNumber });
         // Check if vehicle with this VIN already exists
-        const existingVehicles = await mockFleetStorage_1.persistentFleetStorage.getAllVehicles();
+        const existingVehicles = await neonFleetStorage_1.neonFleetStorage.getAllVehicles();
         const existingVehicle = existingVehicles.find((v) => v.vin === vehicleInput.vin);
         let savedVehicle;
         let isUpdate = false;
         if (existingVehicle) {
             // Update existing vehicle
             const updateData = VehicleTransformer_1.vehicleTransformer.reverseInput(vehicleInput);
-            const updatedVehicle = await mockFleetStorage_1.persistentFleetStorage.updateVehicle(existingVehicle.id, updateData);
+            const updatedVehicle = await neonFleetStorage_1.neonFleetStorage.updateVehicle(existingVehicle.id, updateData);
             if (!updatedVehicle) {
                 return ApiResponseBuilder_1.ApiResponseBuilder.error('RESOURCE_NOT_FOUND', 'Vehicle not found', 'The requested vehicle could not be found', {
                     requestId: context.requestId,
@@ -191,7 +191,7 @@ router.post('/v1/vehicles', (0, errorHandling_1.asyncHandler)(async (req, res) =
         else {
             // Create new vehicle
             const newVehicleData = VehicleTransformer_1.vehicleTransformer.reverseInput(vehicleInput);
-            savedVehicle = await mockFleetStorage_1.persistentFleetStorage.addVehicle({
+            savedVehicle = await neonFleetStorage_1.neonFleetStorage.addVehicle({
                 ...newVehicleData,
                 id: `vehicle_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
                 dateAdded: new Date().toISOString(),
@@ -250,13 +250,13 @@ router.put('/v1/vehicles/:id', (0, errorHandling_1.asyncHandler)(async (req, res
             userId: context.userId
         }, { vehicleId: id, vin: vehicleInput.vin });
         // Check if vehicle exists
-        const existingVehicle = await mockFleetStorage_1.persistentFleetStorage.getVehicle(id);
+        const existingVehicle = await neonFleetStorage_1.neonFleetStorage.getVehicle(id);
         if (!existingVehicle) {
             throw errorHandling_1.ApiError.notFound('Vehicle', id);
         }
         // Check for VIN conflicts (if VIN is being changed)
         if (existingVehicle.vin !== vehicleInput.vin) {
-            const allVehicles = await mockFleetStorage_1.persistentFleetStorage.getAllVehicles();
+            const allVehicles = await neonFleetStorage_1.neonFleetStorage.getAllVehicles();
             const vinConflict = allVehicles.find((v) => v.vin === vehicleInput.vin && v.id !== id);
             if (vinConflict) {
                 throw errorHandling_1.ApiError.conflict('Vehicle', 'VIN', vehicleInput.vin);
@@ -264,7 +264,7 @@ router.put('/v1/vehicles/:id', (0, errorHandling_1.asyncHandler)(async (req, res
         }
         // Update vehicle
         const updateData = VehicleTransformer_1.vehicleTransformer.reverseInput(vehicleInput);
-        const updatedVehicle = await mockFleetStorage_1.persistentFleetStorage.updateVehicle(id, updateData);
+        const updatedVehicle = await neonFleetStorage_1.neonFleetStorage.updateVehicle(id, updateData);
         if (!updatedVehicle) {
             return ApiResponseBuilder_1.ApiResponseBuilder.error('RESOURCE_NOT_FOUND', 'Vehicle not found', 'The requested vehicle could not be found', {
                 requestId: context.requestId,
@@ -308,12 +308,12 @@ router.delete('/v1/vehicles/:id', (0, errorHandling_1.asyncHandler)(async (req, 
             userId: context.userId
         }, { vehicleId: id });
         // Check if vehicle exists
-        const existingVehicle = await mockFleetStorage_1.persistentFleetStorage.getVehicle(id);
+        const existingVehicle = await neonFleetStorage_1.neonFleetStorage.getVehicle(id);
         if (!existingVehicle) {
             throw errorHandling_1.ApiError.notFound('Vehicle', id);
         }
         // Delete vehicle
-        await mockFleetStorage_1.persistentFleetStorage.removeVehicle(id);
+        await neonFleetStorage_1.neonFleetStorage.removeVehicle(id);
         const response = ApiResponseBuilder_1.ApiResponseBuilder.success(null, 'Vehicle deleted successfully', {
             requestId: context.requestId,
             version: context.apiVersion,
@@ -349,7 +349,7 @@ router.get('/v1/vehicles/:id/compliance', (0, errorHandling_1.asyncHandler)(asyn
             userId: context.userId
         }, { vehicleId: id });
         // Get vehicle from storage
-        const vehicle = await mockFleetStorage_1.persistentFleetStorage.getVehicle(id);
+        const vehicle = await neonFleetStorage_1.neonFleetStorage.getVehicle(id);
         if (!vehicle) {
             throw errorHandling_1.ApiError.notFound('Vehicle', id);
         }

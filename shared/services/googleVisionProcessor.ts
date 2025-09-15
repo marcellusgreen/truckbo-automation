@@ -93,6 +93,9 @@ export class GoogleVisionProcessor {
     });
 
     const operationName = operation.name;
+    if (!operationName) {
+      throw new Error('Failed to get operation name from Vision API.');
+    }
     logger.info(`Vision API job started. Operation name: ${operationName}`, this.context);
 
     // Store the mapping between operation name and GCS filename
@@ -139,7 +142,7 @@ export class GoogleVisionProcessor {
     }
 
     // Find the JSON output file
-    const resultFile = files.find(file => file.name.endsWith('.json'));
+    const resultFile = files.find((file: any) => file.name.endsWith('.json'));
     if (!resultFile) {
       throw new Error('No JSON output file found in the result folder.');
     }
@@ -184,7 +187,7 @@ export class GoogleVisionProcessor {
         const deletePromises = [...inputFiles, ...outputFiles].map(file => file.delete());
         await Promise.all(deletePromises);
         logger.info(`Successfully deleted ${deletePromises.length} GCS files.`, this.context);
-    } catch(error) {
+    } catch(error: any) {
         logger.error(`Failed to clean up GCS files for ${operationName}`, this.context, error);
         // Don't throw, just log the error
     }
