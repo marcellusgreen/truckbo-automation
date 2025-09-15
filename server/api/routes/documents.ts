@@ -44,11 +44,21 @@ export interface DocumentProcessingResult {
  * POST /api/v1/documents/process
  * Starts asynchronous processing for an uploaded document.
  */
-router.post('/v1/documents/process', 
-  upload.single('document'), // Changed to single file for simplicity
+router.post('/v1/documents/process',
+  upload.fields([
+    { name: 'document', maxCount: 1 },
+    { name: 'documents', maxCount: 1 },
+    { name: 'image', maxCount: 1 }
+  ]), // Accept multiple possible field names from different frontend services
   asyncHandler(async (req: Request, res: Response) => {
     const context = (req as any).context as RequestContext;
-    const file = req.file;
+    const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+
+    // Extract the first file from any of the possible field names
+    let file: Express.Multer.File | undefined;
+    if (files) {
+      file = files['document']?.[0] || files['documents']?.[0] || files['image']?.[0];
+    }
 
     if (!file) {
       throw ApiError.badRequest('No document provided');
