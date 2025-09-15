@@ -12,7 +12,7 @@
     "server": "node server/server.js",
     "api": "tsx server/api/app.ts",
     "api:dev": "tsx watch server/api/app.ts",
-    "api:test": "tsx server/api/test/api-test.ts",
+    "api:test": "tsx tests/api-test.ts",
     "dev:full": "concurrently \"npm run dev\" \"npm run server\"",
     "dev:api": "concurrently \"npm run dev\" \"npm run api:dev\"",
     "build:server": "rm -rf api/dist && tsc --build --clean tsconfig.server.json && tsc -p tsconfig.server.json",
