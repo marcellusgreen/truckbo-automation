@@ -11,6 +11,7 @@ import { logger } from './logger';
 import { googleVisionProcessor, type GoogleVisionProcessingResult } from './googleVisionProcessor';
 import { dataExtractor, ExtractedVehicleData, ExtractedDriverData } from '../../shared/utils/dataExtractor';
 import { serverPDFService } from './serverPDFService';
+import { documentStatusPoller } from './documentStatusPoller';
 
 export interface DocumentInfo {
   file: File;
@@ -25,6 +26,7 @@ export interface ProcessingResult {
   unprocessedFiles: string[];
   errors: { fileName: string; error: string }[];
   asyncJobs?: { jobId: string; statusUrl: string; fileName: string }[];
+  completedAsyncResults?: { [jobId: string]: any };
   summary: {
     totalFiles: number;
     processed: number;
@@ -79,10 +81,10 @@ export class DocumentProcessor {
 
   async processDocuments(files: FileList, progressCallback: (progress: number, message: string) => void): Promise<ProcessingResult> {
     const results: ClaudeProcessingResult[] = [];
-    
+
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      const progress = ((i + 1) / files.length) * 100;
+      const progress = ((i + 1) / files.length) * 50; // Only use first 50% for upload
       progressCallback(progress, `Processing ${file.name}...`);
 
       const result = await this.processDocument(file);
@@ -93,6 +95,100 @@ export class DocumentProcessor {
     const successfulResults = results.filter(r => r.success);
     const asyncResults = results.filter(r => r.success && (r as any).async);
 
+    console.log(`📊 Processing summary: ${successfulResults.length}/${files.length} successful (${asyncResults.length} async)`);
+
+    // If there are async results, poll for completion
+    if (asyncResults.length > 0) {
+      progressCallback(60, 'Waiting for document processing to complete...');
+
+      const asyncJobs = asyncResults.map(r => ({
+        jobId: (r as any).jobId,
+        statusUrl: (r as any).statusUrl,
+        fileName: files[results.indexOf(r)]?.name || 'unknown'
+      }));
+
+      console.log(`🔄 Polling ${asyncJobs.length} async jobs for completion`);
+
+      try {
+        const completedResults = await documentStatusPoller.pollMultipleJobs(
+          asyncJobs,
+          (jobId, result) => {
+            console.log(`✅ Job ${jobId} completed`);
+            progressCallback(60 + (30 / asyncJobs.length), `Processing completed for ${asyncJobs.find(j => j.jobId === jobId)?.fileName}`);
+          },
+          (jobId, error) => {
+            console.error(`❌ Job ${jobId} failed: ${error}`);
+          }
+        );
+
+        progressCallback(95, 'Finalizing results...');
+
+        // Extract vehicle and driver data from completed results
+        const completedVehicleData: ExtractedVehicleData[] = [];
+        const completedDriverData: ExtractedDriverData[] = [];
+
+        Object.entries(completedResults).forEach(([jobId, result]) => {
+          if (result && result.extractedData) {
+            // Check if it's vehicle data (has VIN) or driver data (has firstName/lastName)
+            if (result.extractedData.vin) {
+              completedVehicleData.push(result.extractedData as ExtractedVehicleData);
+            } else if (result.extractedData.firstName && result.extractedData.lastName) {
+              completedDriverData.push(result.extractedData as ExtractedDriverData);
+            }
+          }
+        });
+
+        progressCallback(100, 'Processing complete!');
+
+        return {
+          vehicleData: completedVehicleData,
+          driverData: completedDriverData,
+          unprocessedFiles: results.filter(r => !r.success).map(r => r.error || 'Unknown error'),
+          errors: results.filter(r => !r.success).map(r => ({ fileName: 'unknown', error: r.error || 'Unknown error' })),
+          asyncJobs,
+          completedAsyncResults: completedResults,
+          summary: {
+            totalFiles: files.length,
+            processed: successfulResults.length,
+            registrationDocs: completedVehicleData.filter(v => v.documentType === 'registration').length,
+            insuranceDocs: completedVehicleData.filter(v => v.documentType === 'insurance').length,
+            medicalCertificates: completedDriverData.filter(d => d.documentType === 'medical_certificate').length,
+            cdlDocuments: completedDriverData.filter(d => d.documentType === 'cdl').length,
+            duplicatesFound: 0
+          }
+        };
+
+      } catch (error) {
+        console.error('❌ Error polling async jobs:', error);
+
+        // Return partial results even if polling fails
+        progressCallback(100, 'Processing completed with some errors');
+
+        return {
+          vehicleData: [],
+          driverData: [],
+          unprocessedFiles: results.filter(r => !r.success).map(r => r.error || 'Unknown error'),
+          errors: [...results.filter(r => !r.success).map(r => ({ fileName: 'unknown', error: r.error || 'Unknown error' })),
+                   { fileName: 'async_polling', error: error instanceof Error ? error.message : 'Async polling failed' }],
+          asyncJobs: asyncResults.map(r => ({
+            jobId: (r as any).jobId,
+            statusUrl: (r as any).statusUrl,
+            fileName: files[results.indexOf(r)]?.name || 'unknown'
+          })),
+          summary: {
+            totalFiles: files.length,
+            processed: 0, // Mark as 0 since we couldn't get final results
+            registrationDocs: 0,
+            insuranceDocs: 0,
+            medicalCertificates: 0,
+            cdlDocuments: 0,
+            duplicatesFound: 0
+          }
+        };
+      }
+    }
+
+    // Handle synchronous results (no async jobs)
     const vehicleData = results
       .filter(r => r.success && r.data?.documentType !== 'medical_certificate' && r.data?.documentType !== 'cdl_license')
       .map(r => r.data) as ExtractedVehicleData[];
@@ -101,25 +197,18 @@ export class DocumentProcessor {
       .filter(r => r.success && (r.data?.documentType === 'medical_certificate' || r.data?.documentType === 'cdl_license'))
       .map(r => r.data) as ExtractedDriverData[];
 
-    console.log(`📊 Processing summary: ${successfulResults.length}/${files.length} successful (${asyncResults.length} async)`);
-
     return {
       vehicleData,
       driverData,
       unprocessedFiles: results.filter(r => !r.success).map(r => r.error || 'Unknown error'),
       errors: results.filter(r => !r.success).map(r => ({ fileName: 'unknown', error: r.error || 'Unknown error' })),
-      asyncJobs: asyncResults.map(r => ({
-        jobId: (r as any).jobId,
-        statusUrl: (r as any).statusUrl,
-        fileName: files[results.indexOf(r)]?.name || 'unknown'
-      })),
       summary: {
         totalFiles: files.length,
         processed: successfulResults.length,
-        registrationDocs: results.filter(r => r.success && (r.data?.documentType === 'registration' || (r as any).async)).length,
-        insuranceDocs: results.filter(r => r.data?.documentType === 'insurance').length,
-        medicalCertificates: results.filter(r => r.data?.documentType === 'medical_certificate').length,
-        cdlDocuments: results.filter(r => r.data?.documentType === 'cdl_license').length,
+        registrationDocs: vehicleData.filter(v => v.documentType === 'registration').length,
+        insuranceDocs: vehicleData.filter(v => v.documentType === 'insurance').length,
+        medicalCertificates: driverData.filter(d => d.documentType === 'medical_certificate').length,
+        cdlDocuments: driverData.filter(d => d.documentType === 'cdl').length,
         duplicatesFound: 0
       }
     };
