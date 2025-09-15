@@ -14,6 +14,7 @@ const errorHandling_1 = require("../middleware/errorHandling");
 const apiTypes_1 = require("../types/apiTypes");
 const logger_1 = require("../../../shared/services/logger");
 const googleVisionProcessor_1 = require("../../../shared/services/googleVisionProcessor");
+const documentStorage_1 = require("../../../shared/services/documentStorage");
 const router = (0, express_1.Router)();
 // Configure multer for file uploads to disk
 const upload = (0, multer_1.default)({ dest: os_1.default.tmpdir() });
@@ -63,8 +64,36 @@ router.get('/v1/documents/process-status/:jobId', (0, errorHandling_1.asyncHandl
             res.status(apiTypes_1.HttpStatus.OK).json(response);
             break;
         case 'succeeded':
-            response = ApiResponseBuilder_1.ApiResponseBuilder.success({ status: 'succeeded', ...result.result }, 'Processing completed successfully.');
-            res.status(apiTypes_1.HttpStatus.OK).json(response);
+            // Save processing results to database
+            try {
+                const saveResult = await saveProcessingResultToDatabase(decodedJobId, result.result, context);
+                response = ApiResponseBuilder_1.ApiResponseBuilder.success({
+                    status: 'succeeded',
+                    ...result.result,
+                    database: {
+                        saved: saveResult.success,
+                        documentId: saveResult.documentId,
+                        vehicleId: saveResult.vehicleId,
+                        driverId: saveResult.driverId,
+                        warnings: saveResult.warnings,
+                        errors: saveResult.errors
+                    }
+                }, 'Processing completed successfully.');
+                res.status(apiTypes_1.HttpStatus.OK).json(response);
+            }
+            catch (dbError) {
+                logger_1.logger.error('Failed to save processing result to database', context, dbError);
+                // Still return success for the processing, but include database error
+                response = ApiResponseBuilder_1.ApiResponseBuilder.success({
+                    status: 'succeeded',
+                    ...result.result,
+                    database: {
+                        saved: false,
+                        error: `Database save failed: ${dbError instanceof Error ? dbError.message : 'Unknown error'}`
+                    }
+                }, 'Processing completed successfully, but database save failed.');
+                res.status(apiTypes_1.HttpStatus.OK).json(response);
+            }
             break;
         case 'failed':
             response = ApiResponseBuilder_1.ApiResponseBuilder.error(apiTypes_1.ApiErrorCode.PROCESSING_FAILED, 'Document processing failed.', result.result);
@@ -74,4 +103,70 @@ router.get('/v1/documents/process-status/:jobId', (0, errorHandling_1.asyncHandl
             throw errorHandling_1.ApiError.internal('Invalid job status returned.');
     }
 }));
+/**
+ * Helper function to save Google Vision processing results to database
+ */
+async function saveProcessingResultToDatabase(jobId, processingResult, context) {
+    // TODO: For now, using a placeholder organization ID - this should come from auth context
+    const organizationId = '550e8400-e29b-41d4-a716-446655440000'; // Sample org from schema
+    // Determine document type from extracted data
+    const documentType = determineDocumentType(processingResult);
+    const documentCategory = documentType === 'medical_certificate' || documentType === 'cdl'
+        ? 'driver_docs'
+        : 'vehicle_docs';
+    // Create document record
+    const documentRecord = {
+        organizationId,
+        documentType,
+        documentCategory,
+        originalFilename: jobId, // Use jobId as placeholder - in real implementation, store original filename
+        s3Key: jobId, // Use jobId as S3 key placeholder
+        ocrText: processingResult.text,
+        extractionData: processingResult,
+        extractionConfidence: processingResult.extractionConfidence || 0.5,
+        processingStatus: 'completed',
+        processingErrors: processingResult.warnings || [],
+        documentDate: processingResult.documentDate,
+        expirationDate: getExpirationDate(processingResult, documentType),
+        processedAt: new Date().toISOString()
+    };
+    // Save to database with extracted data
+    return await documentStorage_1.documentStorage.saveDocumentResult(documentRecord, processingResult);
+}
+/**
+ * Determine document type from processing result
+ */
+function determineDocumentType(result) {
+    if (result.documentType) {
+        return result.documentType;
+    }
+    // Try to infer from extracted data
+    if (result.cdlNumber || result.cdlClass)
+        return 'cdl';
+    if (result.medicalCertNumber || result.examinerName)
+        return 'medical_certificate';
+    if (result.insuranceCarrier || result.policyNumber)
+        return 'insurance';
+    if (result.registrationNumber || result.registeredOwner)
+        return 'registration';
+    // Default fallback
+    return 'registration';
+}
+/**
+ * Extract expiration date based on document type
+ */
+function getExpirationDate(result, docType) {
+    switch (docType) {
+        case 'registration':
+            return result.registrationExpirationDate;
+        case 'insurance':
+            return result.insuranceExpirationDate;
+        case 'cdl':
+            return result.cdlExpirationDate;
+        case 'medical_certificate':
+            return result.medicalExpirationDate;
+        default:
+            return undefined;
+    }
+}
 exports.default = router;
