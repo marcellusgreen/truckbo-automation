@@ -17,5 +17,5 @@
     "exactOptionalPropertyTypes": false
   },
   "include": ["server/**/*.ts", "shared/**/*.ts"],
-  "exclude": ["server/**/*.test.ts", "server/api/test/**/*", "Google Review Files/**/*.ts"]
+  "exclude": ["server/**/*.test.ts", "server/api/test/**/*"]
 }
