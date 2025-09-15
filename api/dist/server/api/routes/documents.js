@@ -23,10 +23,19 @@ router.use(errorHandling_1.requestContext);
  * POST /api/v1/documents/process
  * Starts asynchronous processing for an uploaded document.
  */
-router.post('/v1/documents/process', upload.single('document'), // Changed to single file for simplicity
+router.post('/v1/documents/process', upload.fields([
+    { name: 'document', maxCount: 1 },
+    { name: 'documents', maxCount: 1 },
+    { name: 'image', maxCount: 1 }
+]), // Accept multiple possible field names from different frontend services
 (0, errorHandling_1.asyncHandler)(async (req, res) => {
     const context = req.context;
-    const file = req.file;
+    const files = req.files;
+    // Extract the first file from any of the possible field names
+    let file;
+    if (files) {
+        file = files['document']?.[0] || files['documents']?.[0] || files['image']?.[0];
+    }
     if (!file) {
         throw errorHandling_1.ApiError.badRequest('No document provided');
     }

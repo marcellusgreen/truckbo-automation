@@ -24,6 +24,7 @@ export interface ProcessingResult {
   driverData: ExtractedDriverData[];
   unprocessedFiles: string[];
   errors: { fileName: string; error: string }[];
+  asyncJobs?: { jobId: string; statusUrl: string; fileName: string }[];
   summary: {
     totalFiles: number;
     processed: number;
@@ -88,18 +89,34 @@ export class DocumentProcessor {
       results.push(result);
     }
 
-    const vehicleData = results.filter(r => r.success && r.data?.documentType !== 'medical_certificate' && r.data?.documentType !== 'cdl_license').map(r => r.data) as ExtractedVehicleData[];
-    const driverData = results.filter(r => r.success && (r.data?.documentType === 'medical_certificate' || r.data?.documentType === 'cdl_license')).map(r => r.data) as ExtractedDriverData[];
+    // Filter results - include both completed and async processing results as successful
+    const successfulResults = results.filter(r => r.success);
+    const asyncResults = results.filter(r => r.success && (r as any).async);
+
+    const vehicleData = results
+      .filter(r => r.success && r.data?.documentType !== 'medical_certificate' && r.data?.documentType !== 'cdl_license')
+      .map(r => r.data) as ExtractedVehicleData[];
+
+    const driverData = results
+      .filter(r => r.success && (r.data?.documentType === 'medical_certificate' || r.data?.documentType === 'cdl_license'))
+      .map(r => r.data) as ExtractedDriverData[];
+
+    console.log(`📊 Processing summary: ${successfulResults.length}/${files.length} successful (${asyncResults.length} async)`);
 
     return {
       vehicleData,
       driverData,
       unprocessedFiles: results.filter(r => !r.success).map(r => r.error || 'Unknown error'),
       errors: results.filter(r => !r.success).map(r => ({ fileName: 'unknown', error: r.error || 'Unknown error' })),
+      asyncJobs: asyncResults.map(r => ({
+        jobId: (r as any).jobId,
+        statusUrl: (r as any).statusUrl,
+        fileName: files[results.indexOf(r)]?.name || 'unknown'
+      })),
       summary: {
         totalFiles: files.length,
-        processed: results.filter(r => r.success).length,
-        registrationDocs: results.filter(r => r.data?.documentType === 'registration').length,
+        processed: successfulResults.length,
+        registrationDocs: results.filter(r => r.success && (r.data?.documentType === 'registration' || (r as any).async)).length,
         insuranceDocs: results.filter(r => r.data?.documentType === 'insurance').length,
         medicalCertificates: results.filter(r => r.data?.documentType === 'medical_certificate').length,
         cdlDocuments: results.filter(r => r.data?.documentType === 'cdl_license').length,
@@ -193,7 +210,7 @@ export class DocumentProcessor {
       }
       
       const serverResult = await serverPDFService.processPDF(file);
-      
+
       if (!serverResult.success) {
         return {
           success: false,
@@ -201,7 +218,29 @@ export class DocumentProcessor {
           processingTime: Date.now() - startTime
         };
       }
-      
+
+      // Handle async processing response
+      if (serverResult.async && serverResult.jobId) {
+        console.log(`🔄 Document processing started async - Job ID: ${serverResult.jobId}`);
+
+        // For now, return success with async info
+        // TODO: Implement proper async polling and status checking
+        return {
+          success: true,
+          async: true,
+          jobId: serverResult.jobId,
+          statusUrl: serverResult.statusUrl,
+          status: 'processing',
+          data: {
+            documentType: 'registration', // Default assumption for now
+            text: 'Processing...',
+            message: 'Document uploaded and processing started asynchronously'
+          },
+          processingTime: serverResult.processingTime,
+        };
+      }
+
+      // Handle synchronous processing response (legacy)
       return {
         success: true,
         data: serverResult.data,

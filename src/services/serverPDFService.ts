@@ -170,23 +170,42 @@ class ServerPDFService {
         throw new Error('Invalid response format from server');
       }
 
-      // 6. Log result and handle successful processing
-      const status = result.success ? 'SUCCESS' : 
-                   result.rejected ? 'REJECTED' : 
+      // 6. Handle async processing response (202 Accepted)
+      if (response.status === 202) {
+        // This is an async processing response - job has been queued
+        console.log(`📥 Server response for ${file.name}: ASYNC_PROCESSING (${(Date.now() - startTime)}ms)`);
+        console.log(`🔄 Job ID: ${result.data?.jobId}`);
+        console.log(`📍 Status URL: ${result.data?.statusUrl}`);
+
+        return {
+          success: true, // The upload was successful, processing is async
+          async: true,
+          jobId: result.data?.jobId,
+          statusUrl: result.data?.statusUrl,
+          status: 'processing',
+          message: result.message || 'Document uploaded and processing started',
+          processingTime: Date.now() - startTime,
+          fileName: file.name,
+          data: result.data
+        };
+      }
+
+      // 7. Handle synchronous processing response (legacy format)
+      const status = result.success ? 'SUCCESS' :
+                   result.rejected ? 'REJECTED' :
                    result.requiresManualReview ? 'REVIEW_NEEDED' : 'FAILED';
-      
+
       console.log(`📥 Server response for ${file.name}: ${status} (${(Date.now() - startTime)}ms)`);
-      
+
       if (result.rejected) {
         console.log(`🚫 Document rejected: ${result.error}`);
         console.log(`💡 Suggestions: ${result.rejectionDetails?.suggestions?.join(', ') || 'None provided'}`);
       }
-      
+
       if (result.requiresManualReview) {
         console.log(`👁️ Manual review required: ${result.reviewReason}`);
       }
 
-      
       return {
         ...result,
         processingTime: result.processingTime || (Date.now() - startTime),
