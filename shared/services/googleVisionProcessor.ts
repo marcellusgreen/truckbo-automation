@@ -1,230 +1,192 @@
 // Google Vision Processor - Environment Agnostic
-// Handles document processing using Google Vision API
+// Handles document processing using Google Vision API, including async GCS workflow.
 
 import { ImageAnnotatorClient } from '@google-cloud/vision';
+import { Storage } from '@google-cloud/storage';
 import { logger, LogContext } from './logger';
 import { dataExtractor } from '../utils/dataExtractor';
+import { v4 as uuidv4 } from 'uuid';
 
+// Document processing result interface
 export interface GoogleVisionProcessingResult {
-  success: boolean;
-  text?: string;
-  error?: string;
-  confidence?: number;
-  processingTime?: number;
-  documentType?: 'registration' | 'insurance' | 'medical_certificate' | 'cdl_license' | 'inspection' | 'permit' | 'unknown';
+  text: string;
+  documentType?: string;
   extractedData?: any;
-  fieldConfidence?: { [key: string]: number };
-  dataQuality?: {
-    isComplete: boolean;
-    missingCriticalFields: string[];
-    invalidFields: { field: string; issue: string; }[];
-    qualityScore: number;
-  };
-  conflicts?: {
-    hasConflicts: boolean;
-    conflictDetails: {
-      field: string;
-      values: string[];
-      recommendation: string;
-    }[];
-  };
-  validationResults?: {
-    vinValid: boolean;
-    datesRealistic: boolean;
-    documentsExpired: boolean;
-    requiresImmediateAction: boolean;
-  };
+  confidence?: number;
   requiresReview?: boolean;
   autoApprovalRecommended?: boolean;
   processingNotes?: string[];
   warnings?: string[];
   errors?: string[];
-}
+} 
 
-/**
- * Server-side Google Vision processor that uses the Google Vision API directly
- */
+const INPUT_BUCKET = 'truckbo-gcs-input-documents';
+const OUTPUT_BUCKET = 'truckbo-gcs-output-results';
+
 export class GoogleVisionProcessor {
-  private readonly visionClient: ImageAnnotatorClient;
-  private readonly context: LogContext = {
-    layer: 'processor',
-    component: 'GoogleVisionProcessor'
-  };
+  private visionClient: ImageAnnotatorClient;
+  private storageClient: Storage;
+  private readonly context: LogContext = { layer: 'processor', component: 'GoogleVisionProcessor' };
+  private operationToFileMapping: Map<string, string> = new Map(); // Maps operation name to GCS filename
 
   constructor() {
-    this.visionClient = new ImageAnnotatorClient();
-  }
+    const credentialsJson = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    let clientOptions = {};
 
-  async processDocument(file: File | Buffer, options?: {
-    maxRetries?: number;
-    timeout?: number;
-    expectedDocumentType?: string;
-  }): Promise<GoogleVisionProcessingResult> {
-    const startTime = Date.now();
-    const processingOptions = {
-      maxRetries: 3,
-      timeout: 30000,
-      ...options
-    };
-
-    logger.info('Starting Google Vision document processing', {
-      ...this.context,
-      operation: 'processDocument'
-    }, {
-      fileSize: file instanceof File ? file.size : file.length,
-      expectedType: processingOptions.expectedDocumentType
-    });
-
-    try {
-      const hasCredentials = this.checkCredentials();
-      if (!hasCredentials) {
-        return {
-          success: false,
-          error: 'Google Vision API credentials not configured',
-          processingTime: Date.now() - startTime
-        };
+    if (credentialsJson) {
+      try {
+        const credentials = JSON.parse(credentialsJson);
+        clientOptions = { credentials };
+        logger.info("Initializing Google Cloud clients with credentials from environment variable.", this.context);
+      } catch (error) {
+        logger.warn("Failed to parse GOOGLE_APPLICATION_CREDENTIALS as JSON. Assuming it's a file path.", this.context, error);
+        clientOptions = { keyFilename: credentialsJson };
       }
-
-      const visionResult = await this.callGoogleVisionAPI(file, processingOptions);
-      
-      if (!visionResult.success) {
-        return {
-          success: false,
-          error: visionResult.error || 'Google Vision API processing failed',
-          processingTime: Date.now() - startTime
-        };
-      }
-
-      const structuredResult = await this.extractStructuredData(visionResult.text || '', processingOptions.expectedDocumentType);
-
-      const result: GoogleVisionProcessingResult = {
-        success: true,
-        text: visionResult.text,
-        confidence: visionResult.confidence,
-        processingTime: Date.now() - startTime,
-        ...structuredResult
-      };
-
-      logger.info('Google Vision processing completed successfully', {
-        ...this.context,
-        operation: 'processDocument'
-      }, {
-        processingTime: result.processingTime,
-        confidence: result.confidence,
-        documentType: result.documentType
-      });
-
-      return result;
-
-    } catch (error) {
-      logger.error('Google Vision processing failed', {
-        ...this.context,
-        operation: 'processDocument'
-      }, error as Error, {
-        processingTime: Date.now() - startTime
-      });
-
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown Google Vision processing error',
-        processingTime: Date.now() - startTime
-      };
-    }
-  }
-
-  private checkCredentials(): boolean {
-    const hasProjectId = process.env.GOOGLE_CLOUD_PROJECT_ID || process.env.GCLOUD_PROJECT;
-    const hasKeyFile = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-    const hasServiceAccount = process.env.GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY;
-    
-    return !!(hasProjectId && (hasKeyFile || hasServiceAccount));
-  }
-
-  private async callGoogleVisionAPI(file: File | Buffer, options: any): Promise<{
-    success: boolean;
-    text?: string;
-    error?: string;
-    confidence?: number;
-  }> {
-    try {
-      const content = file instanceof File ? Buffer.from(await file.arrayBuffer()) : file;
-
-      const request = {
-        image: {
-          content: content.toString('base64')
-        }
-      };
-
-      logger.info('Calling Google Vision API', {
-        ...this.context,
-        operation: 'callGoogleVisionAPI'
-      });
-
-      const [result] = await this.visionClient.documentTextDetection(request);
-      const annotation = result.fullTextAnnotation;
-
-      if (annotation?.text) {
-        return {
-          success: true,
-          text: annotation.text,
-          confidence: annotation.pages?.[0]?.confidence || 0.9
-        };
-      } else {
-        logger.warn('Google Vision API returned no text annotation', {
-          ...this.context,
-          operation: 'callGoogleVisionAPI'
-        }, { result });
-        return {
-          success: false,
-          error: 'No text found in document by Google Vision API.'
-        };
-      }
-
-    } catch (error) {
-      logger.error('Google Vision API call failed', {
-        ...this.context,
-        operation: 'callGoogleVisionAPI'
-      }, error as Error);
-
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Google Vision API error'
-      };
-    }
-  }
-
-  private async extractStructuredData(text: string, expectedType?: string): Promise<Partial<GoogleVisionProcessingResult>> {
-    logger.debug('Extracting structured data from text', {
-      ...this.context,
-      operation: 'extractStructuredData'
-    }, {
-      textLength: text.length,
-      expectedType
-    });
-
-    const docType = expectedType || 'unknown';
-
-    if (docType === 'registration' || docType === 'insurance' || docType === 'unknown') {
-      const vehicleData = await dataExtractor.parseVehicleData(text, docType, 'server-processed');
-      return {
-        documentType: vehicleData.documentType,
-        extractedData: vehicleData,
-        requiresReview: vehicleData.needsReview,
-        processingNotes: vehicleData.processingNotes
-      };
-    } else if (docType === 'medical_certificate' || docType === 'cdl_license') {
-      const driverData = await dataExtractor.parseDriverData(text, docType === 'cdl_license' ? 'cdl' : docType, 'server-processed');
-      return {
-        documentType: driverData.documentType === 'cdl' ? 'cdl_license' : driverData.documentType as any,
-        extractedData: driverData,
-        requiresReview: driverData.needsReview,
-        processingNotes: driverData.processingNotes
-      };
     } else {
-      return {
-        documentType: 'unknown',
-        processingNotes: ['Could not determine document type for structured data extraction.']
-      };
+      logger.warn("GOOGLE_APPLICATION_CREDENTIALS environment variable not set. Using default credentials.", this.context);
+    }
+
+    this.visionClient = new ImageAnnotatorClient(clientOptions);
+    this.storageClient = new Storage(clientOptions);
+  }
+
+  /**
+   * Processes a document asynchronously using GCS for large files.
+   * @param fileBuffer The buffer of the file to process.
+   * @param originalName The original name of the file.
+   * @param mimeType The mime type of the file.
+   * @returns The name of the long-running operation.
+   */
+  async processDocumentAsync(fileBuffer: Buffer, originalName: string, mimeType: string): Promise<string> {
+    const gcsFileName = `${uuidv4()}-${originalName}`;
+    logger.info(`Uploading ${originalName} to GCS as ${gcsFileName}`, this.context);
+
+    // 1. Upload file to GCS
+    await this.storageClient.bucket(INPUT_BUCKET).file(gcsFileName).save(fileBuffer, {
+      contentType: mimeType,
+    });
+
+    const gcsSourceUri = `gs://${INPUT_BUCKET}/${gcsFileName}`;
+    const gcsDestinationUri = `gs://${OUTPUT_BUCKET}/${gcsFileName}-results/`;
+
+    logger.info(`Starting async Vision API job for ${gcsSourceUri}`, this.context);
+
+    // 2. Start the async Vision API job
+    const [operation] = await this.visionClient.asyncBatchAnnotateFiles({
+      requests: [
+        {
+          inputConfig: {
+            gcsSource: {
+              uri: gcsSourceUri,
+            },
+            mimeType: mimeType,
+          },
+          features: [{ type: 'DOCUMENT_TEXT_DETECTION' }],
+          outputConfig: {
+            gcsDestination: {
+              uri: gcsDestinationUri,
+            },
+            batchSize: 1, // Process one file at a time
+          },
+        },
+      ],
+    });
+
+    const operationName = operation.name;
+    logger.info(`Vision API job started. Operation name: ${operationName}`, this.context);
+
+    // Store the mapping between operation name and GCS filename
+    this.operationToFileMapping.set(operationName, gcsFileName);
+
+    return operationName;
+  }
+
+  /**
+   * Checks the status of a long-running operation and retrieves the result.
+   * @param operationName The name of the operation to check.
+   * @returns The processing result or a status indicating it's still running.
+   */
+  async getAsyncResult(operationName: string): Promise<{ status: 'processing' | 'succeeded' | 'failed', result?: any }> {
+    // NOTE: In a real app, you might not want to wait. This is a simplified example.
+    // The `operation.promise()` method polls until the operation is complete.
+    const operation = await this.visionClient.checkAsyncBatchAnnotateFilesProgress(operationName);
+
+    if (!operation.done) {
+      logger.info(`Operation ${operationName} is still processing.`, this.context);
+      return { status: 'processing' };
+    }
+
+    if (operation.error) {
+      logger.error(`Operation ${operationName} failed.`, this.context, operation.error);
+      return { status: 'failed', result: operation.error };
+    }
+
+    logger.info(`Operation ${operationName} succeeded. Fetching results from GCS.`, this.context);
+
+    // 3. Fetch the results from the output GCS bucket
+    const gcsFileName = this.operationToFileMapping.get(operationName);
+    if (!gcsFileName) {
+      throw new Error(`No GCS filename found for operation: ${operationName}`);
+    }
+
+    logger.info(`Looking for results with GCS filename: ${gcsFileName}`, this.context);
+
+    const [files] = await this.storageClient.bucket(OUTPUT_BUCKET).getFiles({ prefix: `${gcsFileName}-results/` });
+    logger.info(`Looking for files with prefix: ${gcsFileName}-results/, found ${files.length} files`, this.context);
+
+    if (files.length === 0) {
+      throw new Error(`Vision API job completed, but no output file was found in GCS with prefix: ${gcsFileName}-results/`);
+    }
+
+    // Find the JSON output file
+    const resultFile = files.find(file => file.name.endsWith('.json'));
+    if (!resultFile) {
+      throw new Error('No JSON output file found in the result folder.');
+    }
+
+    const [contents] = await resultFile.download();
+    const resultJson = JSON.parse(contents.toString());
+
+    // The result JSON is complex; we need to extract the text.
+    const fullText = resultJson.responses[0].fullTextAnnotation.text;
+
+    // 4. Perform data extraction on the combined text
+    const structuredData = await this.extractStructuredData(fullText);
+
+    // 5. Clean up GCS files
+    await this.cleanupGcsFiles(operationName);
+
+    return { status: 'succeeded', result: { text: fullText, ...structuredData } };
+  }
+
+  /**
+   * Extracts structured data from raw text. Made public for use after PDF splitting.
+   */
+  async extractStructuredData(text: string, expectedType?: string): Promise<Partial<any>> {
+    logger.debug('Extracting structured data from text', { ...this.context, operation: 'extractStructuredData' });
+    const docType = expectedType || 'unknown';
+    // This logic remains the same as before
+    if (docType === 'registration' || docType === 'insurance' || docType === 'unknown') {
+      return dataExtractor.parseVehicleData(text, docType, 'server-processed-async');
+    } else if (docType === 'medical_certificate' || docType === 'cdl_license') {
+      return dataExtractor.parseDriverData(text, docType === 'cdl_license' ? 'cdl' : docType, 'server-processed-async');
+    } else {
+      return { documentType: 'unknown', processingNotes: ['Could not determine document type.'] };
+    }
+  }
+
+  private async cleanupGcsFiles(operationName: string): Promise<void> {
+    try {
+        logger.info(`Cleaning up GCS files for operation ${operationName}`, this.context);
+        const [inputFiles] = await this.storageClient.bucket(INPUT_BUCKET).getFiles({ prefix: operationName });
+        const [outputFiles] = await this.storageClient.bucket(OUTPUT_BUCKET).getFiles({ prefix: `${operationName}-results/` });
+
+        const deletePromises = [...inputFiles, ...outputFiles].map(file => file.delete());
+        await Promise.all(deletePromises);
+        logger.info(`Successfully deleted ${deletePromises.length} GCS files.`, this.context);
+    } catch(error) {
+        logger.error(`Failed to clean up GCS files for ${operationName}`, this.context, error);
+        // Don't throw, just log the error
     }
   }
 }
