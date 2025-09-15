@@ -17,5 +17,5 @@
     "exactOptionalPropertyTypes": false
   },
   "include": ["server/**/*.ts", "shared/**/*.ts"],
-  "exclude": ["server/**/*.test.ts", "server/**/test/**/*", "**/*test*"]
+  "exclude": ["server/**/*.test.ts", "server/**/test/**/*", "**/*test*", "server/api/test/api-test.ts"]
 }
