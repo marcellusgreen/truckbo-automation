@@ -1368,7 +1368,7 @@ const FleetPage: React.FC = () => {
 
     // Check if vehicle has extracted document data (medium priority)
     const hasDocumentData = vehicle.registrationExpirationDate || vehicle.insuranceCarrier || vehicle.policyNumber;
-    console.log(`📋 Document data check for ${vehicle.truckNumber}: hasDocumentData=${hasDocumentData}`);
+    console.log(`📋 Document data check for ${vehicle.truckNumber || vehicle.vin}: hasDocumentData=${hasDocumentData}`);
     if (hasDocumentData) {
       console.log(`✅ Using extracted document data for ${vehicle.truckNumber}`);
       console.log(`   Registration: expiry=${vehicle.registrationExpirationDate}, number=${vehicle.registrationNumber}`);
@@ -1432,7 +1432,7 @@ const FleetPage: React.FC = () => {
     }
 
     // NO DATA - Show blanks until data is available
-    console.log(`⚠️ No document or compliance data found for ${vehicle.truckNumber}, using blank placeholders`);
+    console.log(`⚠️ No document or compliance data found for ${vehicle.truckNumber || vehicle.vin}, using blank placeholders`);
     return {
       dotInspection: { 
         status: 'warning' as const, 
