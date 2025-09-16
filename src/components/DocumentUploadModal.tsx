@@ -65,24 +65,19 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
     setIsProcessing(true);
     setStep('processing');
     setProcessingProgress(0);
+    setError(null);
 
     try {
-      // Simulate progress updates
-      const progressInterval = setInterval(() => {
-        setProcessingProgress(prev => Math.min(prev + 10, 90));
-      }, 500);
-
-      console.log(`🚀 Starting Claude Vision processing for ${selectedFiles.length} files`);
+      console.log(`🚀 Starting Google Vision processing for ${selectedFiles.length} files`);
       
       const result = await documentProcessor.processDocuments(
         selectedFiles,
         (progress, message) => {
-          setProcessingProgress(Math.min(progress, 90));
+          setProcessingProgress(progress);
           console.log(`📈 Progress: ${progress}% - ${message}`);
         }
       );
       
-      clearInterval(progressInterval);
       setProcessingProgress(100);
       
       setProcessingResult(result);
