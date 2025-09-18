@@ -1,11 +1,19 @@
 // API Service for TruckBo Fleet Compliance System
 // Handles all communication with the backend API
 
+import { authService } from './authService';
+
 const API_BASE_URL = '/api';
 
 async function fetchAPI(url: string, options: RequestInit = {}) {
-  const headers = {
+  const session = authService.getCurrentSession();
+  const authHeaders: Record<string, string> = session?.token
+    ? { Authorization: `Bearer ${session.token}` }
+    : {};
+
+  const headers: HeadersInit = {
     'Content-Type': 'application/json',
+    ...authHeaders,
     ...options.headers,
   };
 

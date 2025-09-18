@@ -1,3 +1,4 @@
+import { authService } from './authService';
 export interface GoogleVisionProcessingResult {
   success: boolean;
   jobId?: string;
@@ -16,8 +17,12 @@ class GoogleVisionProcessor {
 
       // The API is versioned and the correct endpoint is /api/v1/documents/process
       // The base URL handling can be tricky. Assuming a proxy is set up or the API is on the same host.
+      const session = authService.getCurrentSession();
+      const headers: HeadersInit = session?.token ? { Authorization: `Bearer ${session.token}` } : {};
+
       const response = await fetch(`/api/v1/documents/process`, {
         method: 'POST',
+        headers,
         body: formData,
       });
 
