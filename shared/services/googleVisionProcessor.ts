@@ -8,6 +8,9 @@ import { dataExtractor } from '../utils/dataExtractor';
 import { v4 as uuidv4 } from 'uuid';
 import { documentProcessingJobs, DocumentProcessingJobRecord } from './documentProcessingJobs';
 
+type VisionClientOptions = ConstructorParameters<typeof ImageAnnotatorClient>[0];
+type StorageClientOptions = ConstructorParameters<typeof Storage>[0];
+
 // Document processing result interface
 export interface GoogleVisionProcessingResult {
   text: string;
@@ -37,23 +40,26 @@ export class GoogleVisionProcessor {
 
   constructor() {
     const credentialsJson = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-    let clientOptions: Record<string, unknown> = {};
+    let visionOptions: VisionClientOptions = {};
+    let storageOptions: StorageClientOptions = {};
 
     if (credentialsJson) {
       try {
         const credentials = JSON.parse(credentialsJson);
-        clientOptions = { credentials };
+        visionOptions = { credentials };
+        storageOptions = { credentials };
         logger.info('Initializing Google Cloud clients with credentials from environment variable.', this.context);
       } catch (error) {
         logger.warn('Failed to parse GOOGLE_APPLICATION_CREDENTIALS as JSON. Assuming it\'s a file path.', this.context, error as Error);
-        clientOptions = { keyFilename: credentialsJson };
+        visionOptions = { keyFilename: credentialsJson };
+        storageOptions = { keyFilename: credentialsJson };
       }
     } else {
       logger.warn('GOOGLE_APPLICATION_CREDENTIALS environment variable not set. Using default credentials.', this.context);
     }
 
-    this.visionClient = new ImageAnnotatorClient(clientOptions);
-    this.storageClient = new Storage(clientOptions);
+    this.visionClient = new ImageAnnotatorClient(visionOptions);
+    this.storageClient = new Storage(storageOptions);
   }
 
   /**

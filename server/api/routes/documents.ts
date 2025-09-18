@@ -165,7 +165,12 @@ router.get('/v1/documents/process-status/:jobId',
         }
         break;
       case 'failed':
-        response = ApiResponseBuilder.error(ApiErrorCode.PROCESSING_FAILED, 'Document processing failed.', { job, details: processingResult });
+        response = ApiResponseBuilder.error(
+          ApiErrorCode.PROCESSING_FAILED,
+          'Document processing failed.',
+          'Document processing failed.',
+          { details: { context: { job, result: processingResult } } }
+        );
         res.status(HttpStatus.OK).json(response); // Return 200 but with an error status in the body
         break;
       default:

@@ -245,7 +245,7 @@ class DocumentStorage {
 
   /**
    * Handle driver data - create or update driver record with conflict resolution
-   */\n  private async handleDriverData(
+   */  private async handleDriverData(
     data: ExtractedDriverData,
     organizationId: string,
     documentId: string,
