@@ -13,6 +13,7 @@ import { ApiError, asyncHandler, requestContext } from '../middleware/errorHandl
 import { HttpStatus, RequestContext, ApiErrorCode } from '../types/apiTypes';
 import { logger } from '../../../shared/services/logger';
 import { googleVisionProcessor } from '../../../shared/services/googleVisionProcessor';
+import { DocumentProcessingJobRecord } from '../../../shared/services/documentProcessingJobs';
 import { documentStorage, DocumentRecord } from '../../../shared/services/documentStorage';
 
 const router = Router();
@@ -105,22 +106,39 @@ router.get('/v1/documents/process-status/:jobId',
 
     logger.info(`Checking status for job ${decodedJobId}`, { ...context, operation: 'GET /documents/process-status' });
 
-    const result = await googleVisionProcessor.getAsyncResult(decodedJobId);
+    const { status, result: processingResult, job } = await googleVisionProcessor.getAsyncResult(decodedJobId);
 
     let response;
-    switch (result.status) {
+    switch (status) {
       case 'processing':
-        response = ApiResponseBuilder.success({ status: 'processing' }, 'Job is still in progress.');
+        response = ApiResponseBuilder.success({ status: 'processing', job }, 'Job is still in progress.');
         res.status(HttpStatus.OK).json(response);
         break;
       case 'succeeded':
-        // Save processing results to database
+        if (!job) {
+          throw ApiError.internal('Processing succeeded but job metadata is missing.');
+        }
+
+        const organizationId = context.companyId ?? (req as any).user?.companyId;
+        if (!organizationId) {
+          throw ApiError.unauthorized('Organization context missing for document persistence');
+        }
+
         try {
-          const saveResult = await saveProcessingResultToDatabase(decodedJobId, result.result, context);
+          const saveResult = await saveProcessingResultToDatabase(decodedJobId, processingResult, job, context, organizationId);
+
+          if (saveResult.success) {
+            try {
+              await googleVisionProcessor.finalizeJob(decodedJobId);
+            } catch (cleanupError) {
+              logger.warn('Failed to finalize job after persistence', { ...context, operation: 'cleanup' }, cleanupError as Error);
+            }
+          }
 
           response = ApiResponseBuilder.success({
             status: 'succeeded',
-            ...result.result,
+            ...processingResult,
+            job,
             database: {
               saved: saveResult.success,
               documentId: saveResult.documentId,
@@ -136,7 +154,8 @@ router.get('/v1/documents/process-status/:jobId',
           // Still return success for the processing, but include database error
           response = ApiResponseBuilder.success({
             status: 'succeeded',
-            ...result.result,
+            ...processingResult,
+            job,
             database: {
               saved: false,
               error: `Database save failed: ${dbError instanceof Error ? dbError.message : 'Unknown error'}`
@@ -146,7 +165,7 @@ router.get('/v1/documents/process-status/:jobId',
         }
         break;
       case 'failed':
-        response = ApiResponseBuilder.error(ApiErrorCode.PROCESSING_FAILED, 'Document processing failed.', result.result);
+        response = ApiResponseBuilder.error(ApiErrorCode.PROCESSING_FAILED, 'Document processing failed.', { job, details: processingResult });
         res.status(HttpStatus.OK).json(response); // Return 200 but with an error status in the body
         break;
       default:
@@ -161,10 +180,10 @@ router.get('/v1/documents/process-status/:jobId',
 async function saveProcessingResultToDatabase(
   jobId: string,
   processingResult: any,
-  context: RequestContext
+  job: DocumentProcessingJobRecord,
+  context: RequestContext,
+  organizationId: string
 ) {
-  // TODO: For now, using a placeholder organization ID - this should come from auth context
-  const organizationId = '550e8400-e29b-41d4-a716-446655440000'; // Sample org from schema
 
   // Determine document type from extracted data
   const documentType = determineDocumentType(processingResult);
@@ -172,15 +191,32 @@ async function saveProcessingResultToDatabase(
     ? 'driver_docs'
     : 'vehicle_docs';
 
+  const extractionData = {
+    ...processingResult,
+    jobMetadata: {
+      jobId,
+      originalFilename: job.originalFilename,
+      gcsInputBucket: job.gcsInputBucket,
+      gcsInputObject: job.gcsInputObject,
+      gcsOutputBucket: job.gcsOutputBucket,
+      gcsOutputPrefix: job.gcsOutputPrefix,
+      resultObject: job.resultObject
+    }
+  };
+
   // Create document record
   const documentRecord: DocumentRecord = {
     organizationId,
     documentType,
     documentCategory,
-    originalFilename: jobId, // Use jobId as placeholder - in real implementation, store original filename
-    s3Key: jobId, // Use jobId as S3 key placeholder
+    originalFilename: job.originalFilename,
+    fileSize: job.fileSize ?? undefined,
+    fileType: job.mimeType ?? undefined,
+    s3Bucket: job.gcsInputBucket,
+    s3Key: job.gcsInputObject,
+    s3Url: `gs://${job.gcsInputBucket}/${job.gcsInputObject}`,
     ocrText: processingResult.text,
-    extractionData: processingResult,
+    extractionData,
     extractionConfidence: processingResult.extractionConfidence || 0.5,
     processingStatus: 'completed',
     processingErrors: processingResult.warnings || [],
@@ -230,3 +266,11 @@ function getExpirationDate(result: any, docType: string): string | undefined {
 }
 
 export default router;
+
+
+
+
+
+
+
+

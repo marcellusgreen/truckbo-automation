@@ -2,10 +2,11 @@
 // Handles document processing using Google Vision API, including async GCS workflow.
 
 import { ImageAnnotatorClient } from '@google-cloud/vision';
-import { Storage } from '@google-cloud/storage';
+import { Storage, File } from '@google-cloud/storage';
 import { logger, LogContext } from './logger';
 import { dataExtractor } from '../utils/dataExtractor';
 import { v4 as uuidv4 } from 'uuid';
+import { documentProcessingJobs, DocumentProcessingJobRecord } from './documentProcessingJobs';
 
 // Document processing result interface
 export interface GoogleVisionProcessingResult {
@@ -18,7 +19,13 @@ export interface GoogleVisionProcessingResult {
   processingNotes?: string[];
   warnings?: string[];
   errors?: string[];
-} 
+}
+
+export interface GoogleVisionAsyncResult {
+  status: 'processing' | 'succeeded' | 'failed';
+  result?: any;
+  job?: DocumentProcessingJobRecord;
+}
 
 const INPUT_BUCKET = 'truckbo-gcs-input-documents';
 const OUTPUT_BUCKET = 'truckbo-gcs-output-results';
@@ -27,23 +34,22 @@ export class GoogleVisionProcessor {
   private visionClient: ImageAnnotatorClient;
   private storageClient: Storage;
   private readonly context: LogContext = { layer: 'processor', component: 'GoogleVisionProcessor' };
-  private operationToFileMapping: Map<string, string> = new Map(); // Maps operation name to GCS filename
 
   constructor() {
     const credentialsJson = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-    let clientOptions = {};
+    let clientOptions: Record<string, unknown> = {};
 
     if (credentialsJson) {
       try {
         const credentials = JSON.parse(credentialsJson);
         clientOptions = { credentials };
-        logger.info("Initializing Google Cloud clients with credentials from environment variable.", this.context);
+        logger.info('Initializing Google Cloud clients with credentials from environment variable.', this.context);
       } catch (error) {
-        logger.warn("Failed to parse GOOGLE_APPLICATION_CREDENTIALS as JSON. Assuming it's a file path.", this.context, error);
+        logger.warn('Failed to parse GOOGLE_APPLICATION_CREDENTIALS as JSON. Assuming it\'s a file path.', this.context, error as Error);
         clientOptions = { keyFilename: credentialsJson };
       }
     } else {
-      logger.warn("GOOGLE_APPLICATION_CREDENTIALS environment variable not set. Using default credentials.", this.context);
+      logger.warn('GOOGLE_APPLICATION_CREDENTIALS environment variable not set. Using default credentials.', this.context);
     }
 
     this.visionClient = new ImageAnnotatorClient(clientOptions);
@@ -98,8 +104,16 @@ export class GoogleVisionProcessor {
     }
     logger.info(`Vision API job started. Operation name: ${operationName}`, this.context);
 
-    // Store the mapping between operation name and GCS filename
-    this.operationToFileMapping.set(operationName, gcsFileName);
+    await documentProcessingJobs.recordJobStart({
+      jobId: operationName,
+      originalFilename: originalName,
+      mimeType,
+      fileSize: fileBuffer.length,
+      gcsInputBucket: INPUT_BUCKET,
+      gcsInputObject: gcsFileName,
+      gcsOutputBucket: OUTPUT_BUCKET,
+      gcsOutputPrefix: `${gcsFileName}-results/`
+    });
 
     return operationName;
   }
@@ -109,87 +123,130 @@ export class GoogleVisionProcessor {
    * @param operationName The name of the operation to check.
    * @returns The processing result or a status indicating it's still running.
    */
-  async getAsyncResult(operationName: string): Promise<{ status: 'processing' | 'succeeded' | 'failed', result?: any }> {
-    // NOTE: In a real app, you might not want to wait. This is a simplified example.
-    // The `operation.promise()` method polls until the operation is complete.
+  async getAsyncResult(operationName: string): Promise<GoogleVisionAsyncResult> {
+    const jobRecord = await documentProcessingJobs.getJob(operationName);
+    if (!jobRecord) {
+      throw new Error(`No persisted job metadata found for operation: ${operationName}`);
+    }
+
     const operation = await this.visionClient.checkAsyncBatchAnnotateFilesProgress(operationName);
 
     if (!operation.done) {
       logger.info(`Operation ${operationName} is still processing.`, this.context);
-      return { status: 'processing' };
+      return { status: 'processing', job: jobRecord };
     }
 
     if (operation.error) {
-      logger.error(`Operation ${operationName} failed.`, this.context, operation.error);
-      return { status: 'failed', result: operation.error };
+      const message = operation.error.message || 'Vision API reported an error';
+      await documentProcessingJobs.markFailed(operationName, message);
+      logger.error(`Operation ${operationName} failed.`, this.context, operation.error as Error);
+      return { status: 'failed', result: operation.error, job: { ...jobRecord, status: 'failed', errorMessage: message } };
     }
 
     logger.info(`Operation ${operationName} succeeded. Fetching results from GCS.`, this.context);
 
-    // 3. Fetch the results from the output GCS bucket
-    const gcsFileName = this.operationToFileMapping.get(operationName);
-    if (!gcsFileName) {
-      throw new Error(`No GCS filename found for operation: ${operationName}`);
-    }
-
-    logger.info(`Looking for results with GCS filename: ${gcsFileName}`, this.context);
-
-    const [files] = await this.storageClient.bucket(OUTPUT_BUCKET).getFiles({ prefix: `${gcsFileName}-results/` });
-    logger.info(`Looking for files with prefix: ${gcsFileName}-results/, found ${files.length} files`, this.context);
+    const [files] = await this.storageClient
+      .bucket(jobRecord.gcsOutputBucket)
+      .getFiles({ prefix: jobRecord.gcsOutputPrefix });
+    logger.info(`Looking for files with prefix: ${jobRecord.gcsOutputPrefix}, found ${files.length} files`, this.context);
 
     if (files.length === 0) {
-      throw new Error(`Vision API job completed, but no output file was found in GCS with prefix: ${gcsFileName}-results/`);
+      throw new Error(`Vision API job completed, but no output file was found in GCS with prefix: ${jobRecord.gcsOutputPrefix}`);
     }
 
     // Find the JSON output file
-    const resultFile = files.find((file: any) => file.name.endsWith('.json'));
+    const resultFile = files.find((file: File) => file.name.endsWith('.json'));
     if (!resultFile) {
       throw new Error('No JSON output file found in the result folder.');
     }
 
     const [contents] = await resultFile.download();
-    const resultJson = JSON.parse(contents.toString());
+    const rawResult = contents.toString('utf8');
+    const resultJson = JSON.parse(rawResult);
 
     // The result JSON is complex; we need to extract the text.
-    const fullText = resultJson.responses[0].fullTextAnnotation.text;
+    const fullText = resultJson.responses[0].fullTextAnnotation?.text || '';
 
     // 4. Perform data extraction on the combined text
-    const structuredData = await this.extractStructuredData(fullText);
+    const structuredData = await this.extractStructuredData(fullText, undefined, jobRecord.originalFilename);
 
-    // 5. Clean up GCS files
-    await this.cleanupGcsFiles(operationName);
+    const updatedJob = await documentProcessingJobs.markSucceeded(operationName, rawResult) || jobRecord;
 
-    return { status: 'succeeded', result: { text: fullText, ...structuredData } };
+    return {
+      status: 'succeeded',
+      result: { text: fullText, ...structuredData },
+      job: updatedJob
+    };
   }
 
   /**
    * Extracts structured data from raw text. Made public for use after PDF splitting.
    */
-  async extractStructuredData(text: string, expectedType?: string): Promise<Partial<any>> {
+  async extractStructuredData(text: string, expectedType?: string, sourceFileName?: string): Promise<Partial<any>> {
     logger.debug('Extracting structured data from text', { ...this.context, operation: 'extractStructuredData' });
     const docType = expectedType || 'unknown';
-    // This logic remains the same as before
+    const fileName = sourceFileName || 'server-processed-async';
+
     if (docType === 'registration' || docType === 'insurance' || docType === 'unknown') {
-      return dataExtractor.parseVehicleData(text, docType, 'server-processed-async');
-    } else if (docType === 'medical_certificate' || docType === 'cdl_license') {
-      return dataExtractor.parseDriverData(text, docType === 'cdl_license' ? 'cdl' : docType, 'server-processed-async');
+      return dataExtractor.parseVehicleData(text, docType, fileName);
+    } else if (docType === 'medical_certificate' || docType === 'cdl_license' || docType === 'cdl') {
+      const driverDocType = docType === 'cdl_license' ? 'cdl' : docType;
+      return dataExtractor.parseDriverData(text, driverDocType, fileName);
     } else {
       return { documentType: 'unknown', processingNotes: ['Could not determine document type.'] };
     }
   }
 
-  private async cleanupGcsFiles(operationName: string): Promise<void> {
-    try {
-        logger.info(`Cleaning up GCS files for operation ${operationName}`, this.context);
-        const [inputFiles] = await this.storageClient.bucket(INPUT_BUCKET).getFiles({ prefix: operationName });
-        const [outputFiles] = await this.storageClient.bucket(OUTPUT_BUCKET).getFiles({ prefix: `${operationName}-results/` });
+  /**
+   * Finalize a job once persistence succeeds. Optionally cleans up GCS artifacts.
+   */
+  async finalizeJob(jobId: string, options: { cleanup?: boolean } = {}): Promise<void> {
+    const { cleanup = true } = options;
+    const jobRecord = await documentProcessingJobs.getJob(jobId);
+    if (!jobRecord) {
+      logger.warn('Attempted to finalize unknown job', this.context, { jobId });
+      return;
+    }
 
-        const deletePromises = [...inputFiles, ...outputFiles].map(file => file.delete());
-        await Promise.all(deletePromises);
-        logger.info(`Successfully deleted ${deletePromises.length} GCS files.`, this.context);
-    } catch(error: any) {
-        logger.error(`Failed to clean up GCS files for ${operationName}`, this.context, error);
-        // Don't throw, just log the error
+    if (!cleanup) {
+      logger.info('Finalize called without cleanup; leaving artifacts in place', this.context, { jobId });
+      return;
+    }
+
+    await this.cleanupJobArtifacts(jobRecord);
+  }
+
+  private async cleanupJobArtifacts(job: DocumentProcessingJobRecord): Promise<void> {
+    try {
+      logger.info(`Cleaning up GCS files for operation ${job.jobId}`, this.context);
+
+      const deletions: Promise<unknown>[] = [];
+      const inputFile = this.storageClient.bucket(job.gcsInputBucket).file(job.gcsInputObject);
+      deletions.push(this.deleteIfExists(inputFile));
+
+      const [outputFiles] = await this.storageClient.bucket(job.gcsOutputBucket).getFiles({ prefix: job.gcsOutputPrefix });
+      for (const file of outputFiles) {
+        deletions.push(this.deleteIfExists(file));
+      }
+
+      await Promise.all(deletions);
+      await documentProcessingJobs.markCleanupStatus(job.jobId, 'completed');
+      logger.info(`Successfully deleted ${deletions.length} GCS files.`, this.context, { jobId: job.jobId });
+    } catch (error) {
+      logger.error(`Failed to clean up GCS files for ${job.jobId}`, this.context, error as Error);
+      await documentProcessingJobs.markCleanupStatus(job.jobId, 'failed', (error as Error).message);
+    }
+  }
+
+  private async deleteIfExists(file: File): Promise<void> {
+    try {
+      await file.delete();
+    } catch (error: any) {
+      if (error?.code === 404) {
+        logger.debug('File already deleted during cleanup', { ...this.context, operation: 'deleteIfExists' }, { file: file.name });
+        return;
+      }
+      throw error;
     }
   }
 }

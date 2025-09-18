@@ -177,6 +177,29 @@ CREATE TABLE documents (
 );
 
 -- ===========================================
+-- DOCUMENT PROCESSING JOBS
+-- ===========================================
+
+CREATE TABLE document_processing_jobs (
+    job_id TEXT PRIMARY KEY,
+    original_filename TEXT NOT NULL,
+    mime_type TEXT,
+    file_size BIGINT,
+    gcs_input_bucket TEXT NOT NULL,
+    gcs_input_object TEXT NOT NULL,
+    gcs_output_bucket TEXT NOT NULL,
+    gcs_output_prefix TEXT NOT NULL,
+    result_object TEXT,
+    status VARCHAR(20) DEFAULT 'processing', -- processing, succeeded, failed
+    error_message TEXT,
+    cleanup_status VARCHAR(20) DEFAULT 'pending', -- pending, completed, failed
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX idx_document_jobs_status ON document_processing_jobs(status);
+-- ===========================================
 -- COMPLIANCE ALERTS
 -- ===========================================
 
@@ -410,3 +433,4 @@ INSERT INTO users (organization_id, email, password_hash, first_name, last_name,
 ('550e8400-e29b-41d4-a716-446655440000', 'admin@sampletrucking.com', '$2b$10$dummy_hash', 'John', 'Admin', 'admin');
 
 COMMENT ON SCHEMA public IS 'TruckBo Fleet & Driver Compliance Database - Production Schema v1.0';
+
