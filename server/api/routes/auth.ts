@@ -461,30 +461,6 @@ router.post('/v1/auth/register', authRateLimit, async (req: Request, res: Respon
 /**
  * Middleware to authenticate JWT tokens
  */
-export function authenticateToken(req: Request, res: Response, next: any) {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    const response = ApiResponseBuilder.unauthorized(
-      'Access token required',
-      { requestId: req.context?.requestId, version: req.context?.apiVersion }
-    );
-    return res.status(401).json(response);
-  }
-
-  jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
-    if (err) {
-      const response = ApiResponseBuilder.forbidden(
-        'Invalid or expired token',
-        undefined,
-        { requestId: req.context?.requestId, version: req.context?.apiVersion }
-      );
-      return res.status(403).json(response);
-    }
-    req.user = user;
-    next();
-  });
-}
+export { authenticateToken } from '../middleware/authentication';
 
 export default router;

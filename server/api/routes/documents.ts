@@ -10,6 +10,7 @@ import os from 'os';
 
 import { ApiResponseBuilder } from '../core/ApiResponseBuilder';
 import { ApiError, asyncHandler, requestContext } from '../middleware/errorHandling';
+import { authenticateToken } from '../middleware/authentication';
 import { HttpStatus, RequestContext, ApiErrorCode } from '../types/apiTypes';
 import { logger } from '../../../shared/services/logger';
 import { googleVisionProcessor } from '../../../shared/services/googleVisionProcessor';
@@ -22,6 +23,7 @@ const router = Router();
 const upload = multer({ dest: os.tmpdir() });
 
 router.use(requestContext);
+router.use(authenticateToken);
 
 export interface DocumentProcessingResult {
     documentId: string;
