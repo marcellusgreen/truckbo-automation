@@ -2,6 +2,7 @@
 // Polls async document processing jobs until completion
 
 import { logger } from './logger';
+import { authService } from './authService';
 
 export interface AsyncJobStatus {
   jobId: string;
@@ -38,7 +39,12 @@ class DocumentStatusPoller {
 
         try {
           const baseUrl = import.meta.env.DEV ? '' : window.location.origin;
-          const response = await fetch(`${baseUrl}${statusUrl}`);
+          const session = authService.getCurrentSession();
+          const headers: HeadersInit = session?.token ? { Authorization: `Bearer ${session.token}` } : {};
+
+          const response = await fetch(`${baseUrl}${statusUrl}`, {
+            headers,
+          });
 
           if (!response.ok) {
             throw new Error(`Status check failed: ${response.status} ${response.statusText}`);
