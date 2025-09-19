@@ -246,6 +246,45 @@ class PersistentFleetStorage {
     }, context);
   }
 
+  async clearFleet(): Promise<void> {
+    const context: LogContext = {
+      layer: 'storage',
+      component: 'PersistentFleetStorage',
+      operation: 'clearFleet'
+    };
+
+    await withErrorHandling.async(async () => {
+      const headers = await this.getAuthHeaders();
+      const vehicles = await this.getFleetAsync();
+      const failures: string[] = [];
+
+      for (const vehicle of vehicles) {
+        try {
+          const response = await fetch(`/api/v1/vehicles/${vehicle.id}`, {
+            method: 'DELETE',
+            headers
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: 'Failed to delete vehicle' }));
+            throw new Error(errorData.error || response.statusText);
+          }
+
+          FleetEvents.vehicleDeleted(vehicle.vin, 'persistentFleetStorage');
+        } catch (error) {
+          failures.push(vehicle.vin || vehicle.id);
+          logger.error('Failed to clear vehicle during fleet reset', context, error as Error, { vehicle });
+        }
+      }
+
+      if (failures.length > 0) {
+        throw new Error(`Failed to remove ${failures.length} vehicle(s)`);
+      }
+
+      FleetEvents.fleetCleared('persistentFleetStorage');
+      this.notifyListeners();
+    }, context);
+  }
   subscribe(listener: () => void): () => void {
     this.listeners.push(listener);
     return () => {
