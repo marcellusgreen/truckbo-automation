@@ -1,0 +1,195 @@
+﻿src/App.tsx(26,55): error TS6133: 'FleetDashboard' is declared but its value is never read.
+src/App.tsx(29,10): error TS6133: 'eventBus' is declared but its value is never read.
+src/App.tsx(100,11): error TS6133: 'vehiclesToAdd' is declared but its value is never read.
+src/App.tsx(289,28): error TS2551: Property 'addVehicles' does not exist on type 'PersistentFleetStorage'. Did you mean 'addVehicle'?
+src/App.tsx(1020,15): error TS2304: Cannot find name 'loadVehicles'.
+src/App.tsx(1037,10): error TS6133: 'isLoading' is declared but its value is never read.
+src/App.tsx(1042,10): error TS6133: 'showReconciledView' is declared but its value is never read.
+src/App.tsx(1042,30): error TS6133: 'setShowReconciledView' is declared but its value is never read.
+src/App.tsx(1074,57): error TS7006: Parameter 'event' implicitly has an 'any' type.
+src/App.tsx(1106,43): error TS2551: Property 'addVehicles' does not exist on type 'PersistentFleetStorage'. Did you mean 'addVehicle'?
+src/App.tsx(1566,27): error TS2367: This comparison appears to be unintentional because the types '"active" | "inactive" | "maintenance"' and '"all"' have no overlap.
+src/App.tsx(1584,9): error TS6133: 'fleetStats' is declared but its value is never read.
+src/App.tsx(1723,44): error TS2345: Argument of type '"active" | "inactive" | "maintenance" | "all"' is not assignable to parameter of type 'SetStateAction<"compliant" | "non_compliant" | "expires_soon" | "review_needed" | "all">'.
+  Type '"active"' is not assignable to type 'SetStateAction<"compliant" | "non_compliant" | "expires_soon" | "review_needed" | "all">'.
+src/App.tsx(1857,46): error TS6133: 'index' is declared but its value is never read.
+src/App.tsx(1861,50): error TS2352: Conversion of type 'UnifiedVehicleData & Record<"overallStatus", unknown>' to type 'VehicleSummaryView' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'UnifiedVehicleData & Record<"overallStatus", unknown>' is missing the following properties from type 'VehicleSummaryView': totalDocuments, documentTypes, activeConflicts, hasExpiredDocuments, hasExpiringSoonDocuments
+src/App.tsx(1867,17): error TS2322: Type '{ id: string; vin: string; make: string; model: string; year: string; licensePlate: string; truckNumber: string; status: VehicleDisplayStatus; location: string; mileage: null; ... 4 more ...; engineDescription: string; } | { ...; }' is not assignable to type '{ id: string; vin: string; make: string; model: string; year: number; licensePlate: string; truckNumber?: string | undefined; status: "active" | "inactive" | "maintenance"; dotNumber?: string | undefined; dateAdded: string; }'.
+  Property 'dateAdded' is missing in type '{ id: string; vin: string; make: string; model: string; year: string; licensePlate: string; truckNumber: string; status: VehicleDisplayStatus; location: string; mileage: null; ... 4 more ...; engineDescription: string; }' but required in type '{ id: string; vin: string; make: string; model: string; year: number; licensePlate: string; truckNumber?: string | undefined; status: "active" | "inactive" | "maintenance"; dotNumber?: string | undefined; dateAdded: string; }'.
+src/App.tsx(1868,17): error TS2322: Type '{ overallStatus: ComplianceDisplayStatus; complianceScore: number; registration: { status: "warning" | "active" | "expired"; daysUntilExpiry: number | null; expiryDate: string | null; renewalCost: null; }; ... 4 more ...; lastUpdated: string; } | { ...; }' is not assignable to type '{ registration: ComplianceItem; insurance: ComplianceItem; dotInspection: ComplianceItem; ifta: ComplianceItem; overall: { ...; }; }'.
+  Type '{ overallStatus: ComplianceDisplayStatus; complianceScore: number; registration: { status: "warning" | "active" | "expired"; daysUntilExpiry: number | null; expiryDate: string | null; renewalCost: null; }; ... 4 more ...; lastUpdated: string; }' is missing the following properties from type '{ registration: ComplianceItem; insurance: ComplianceItem; dotInspection: ComplianceItem; ifta: ComplianceItem; overall: { ...; }; }': dotInspection, overall
+src/App.tsx(1900,50): error TS6133: 'index' is declared but its value is never read.
+src/App.tsx(1901,23): error TS6133: 'isReconciledVehicle' is declared but its value is never read.
+src/App.tsx(2382,66): error TS7006: Parameter 'event' implicitly has an 'any' type.
+src/App.tsx(2522,10): error TS6133: 'storageInitialized' is declared but its value is never read.
+src/components/AddVehicleModal.tsx(96,24): error TS2345: Argument of type 'Promise<VehicleRecord>' is not assignable to parameter of type 'VehicleRecord'.
+  Type 'Promise<VehicleRecord>' is missing the following properties from type 'VehicleRecord': id, vin, make, model, and 6 more.
+src/components/BulkUploadModal.tsx(216,45): error TS2551: Property 'addVehicles' does not exist on type 'PersistentFleetStorage'. Did you mean 'addVehicle'?
+src/components/DocumentUploadModal.tsx(341,55): error TS2339: Property 'consolidatedVehicles' does not exist on type 'ProcessingResult'.
+src/components/DocumentUploadModal.tsx(343,64): error TS2339: Property 'consolidatedVehicles' does not exist on type 'ProcessingResult'.
+src/components/DocumentUploadModal.tsx(400,33): error TS2322: Type '{}' is not assignable to type 'ReactNode'.
+src/components/DocumentUploadModal.tsx(457,53): error TS2339: Property 'consolidatedVehicles' does not exist on type 'ProcessingResult'.
+src/components/DocumentUploadModal.tsx(459,62): error TS2339: Property 'consolidatedVehicles' does not exist on type 'ProcessingResult'.
+src/components/DriverManagementPage.tsx(37,49): error TS2339: Property 'getDrivers' does not exist on type 'PersistentFleetStorage'.
+src/components/ErrorBoundary.tsx(6,24): error TS6133: 'AppError' is declared but its value is never read.
+src/components/ErrorBoundaryTestComponent.tsx(230,7): error TS2353: Object literal may only specify known properties, and 'errorType' does not exist in type 'LogContext'.
+src/components/NotificationSystem.tsx(107,41): error TS2339: Property 'clearAll' does not exist on type 'LegacyErrorHandlerService'.
+src/main.tsx(3,41): error TS2307: Cannot find module './TestRealAppWithErrorCapture.tsx' or its corresponding type declarations.
+src/pages/ErrorHandlingTestPage.tsx(7,24): error TS6133: 'withErrorHandling' is declared but its value is never read.
+src/pages/ErrorHandlingTestPage.tsx(9,1): error TS6133: 'reconcilerAPI' is declared but its value is never read.
+src/pages/ErrorHandlingTestPage.tsx(111,56): error TS2345: Argument of type '{ vin: string; make: string; model: string; year: number; licensePlate: string; status: "active"; }' is not assignable to parameter of type 'Omit<VehicleRecord, "id" | "dateAdded" | "lastUpdated">'.
+  Property 'truckNumber' is missing in type '{ vin: string; make: string; model: string; year: number; licensePlate: string; status: "active"; }' but required in type 'Omit<VehicleRecord, "id" | "dateAdded" | "lastUpdated">'.
+src/pages/ErrorHandlingTestPage.tsx(153,44): error TS2339: Property 'getFleet' does not exist on type 'PersistentFleetStorage'.
+src/pages/ErrorHandlingTestPage.tsx(194,11): error TS2353: Object literal may only specify known properties, and 'fallback' does not exist in type '{ success: boolean; data: string; } | (() => Promise<{ success: boolean; data: string; }>)'.
+src/pages/ErrorHandlingTestPage.tsx(241,65): error TS2554: Expected 1-3 arguments, but got 4.
+src/pages/ErrorHandlingTestPage.tsx(243,61): error TS2353: Object literal may only specify known properties, and 'testData' does not exist in type 'Error'.
+src/pages/ErrorHandlingTestPage.tsx(248,16): error TS2339: Property 'completeOperation' does not exist on type 'Logger'.
+src/services/authService.ts(98,11): error TS6196: 'LoginAttemptRecord' is declared but never used.
+src/services/authService.ts(108,20): error TS6133: 'COMPANIES_KEY' is declared but its value is never read.
+src/services/authService.ts(109,20): error TS6133: 'USERS_KEY' is declared but its value is never read.
+src/services/authService.ts(110,20): error TS6133: 'LOGIN_ATTEMPTS_KEY' is declared but its value is never read.
+src/services/authService.ts(111,20): error TS6133: 'MAX_LOGIN_ATTEMPTS' is declared but its value is never read.
+src/services/authService.ts(112,20): error TS6133: 'LOCKOUT_DURATION' is declared but its value is never read.
+src/services/authService.ts(136,13): error TS6133: 'result' is declared but its value is never read.
+src/services/authService.ts(143,9): error TS2345: Argument of type 'string' is not assignable to parameter of type 'Error | AppError'.
+src/services/authService.ts(373,11): error TS6133: 'getSubscriptionLimits' is declared but its value is never read.
+src/services/authService.ts(385,11): error TS6133: 'getAllPermissions' is declared but its value is never read.
+src/services/authService.ts(399,11): error TS6133: 'getManagerPermissions' is declared but its value is never read.
+src/services/authService.ts(413,17): error TS6133: 'generateSecureToken' is declared but its value is never read.
+src/services/centralizedFleetDataService.ts(6,1): error TS6133: 'fleetDataManager' is declared but its value is never read.
+src/services/centralizedFleetDataService.ts(10,1): error TS6192: All imports in import declaration are unused.
+src/services/centralizedFleetDataService.ts(11,1): error TS6133: 'StandardizedVehicle' is declared but its value is never read.
+src/services/centralizedFleetDataService.ts(54,11): error TS6133: 'lastLoadTime' is declared but its value is never read.
+src/services/centralizedFleetDataService.ts(55,20): error TS6133: 'CACHE_DURATION' is declared but its value is never read.
+src/services/centralizedFleetDataService.ts(147,55): error TS2551: Property 'addVehicles' does not exist on type 'PersistentFleetStorage'. Did you mean 'addVehicle'?
+src/services/centralizedFleetDataService.ts(152,59): error TS7006: Parameter 'f' implicitly has an 'any' type.
+src/services/claudeTextProcessor.ts(7,63): error TS2307: Cannot find module './claudeVisionProcessor' or its corresponding type declarations.
+src/services/claudeTextProcessor.ts(86,17): error TS6133: 'sendPDFToClaude' is declared but its value is never read.
+src/services/claudeTextProcessor.ts(103,17): error TS2769: No overload matches this call.
+  Overload 1 of 3, '(body: MessageCreateParamsNonStreaming, options?: RequestOptions | undefined): APIPromise<Message>', gave the following error.
+    Type '"application/pdf"' is not assignable to type '"image/jpeg" | "image/png" | "image/gif" | "image/webp"'.
+  Overload 2 of 3, '(body: MessageCreateParamsStreaming, options?: RequestOptions | undefined): APIPromise<Stream<RawMessageStreamEvent>>', gave the following error.
+    Type '"application/pdf"' is not assignable to type '"image/jpeg" | "image/png" | "image/gif" | "image/webp"'.
+  Overload 3 of 3, '(body: MessageCreateParamsBase, options?: RequestOptions | undefined): APIPromise<Message | Stream<RawMessageStreamEvent>>', gave the following error.
+    Type '"application/pdf"' is not assignable to type '"image/jpeg" | "image/png" | "image/gif" | "image/webp"'.
+src/services/databaseService.ts(193,35): error TS6133: 'organizationId' is declared but its value is never read.
+src/services/databaseService.ts(225,34): error TS6133: 'organizationId' is declared but its value is never read.
+src/services/databaseService.ts(277,39): error TS6133: 'organizationId' is declared but its value is never read.
+src/services/databaseService.ts(292,34): error TS6133: 'organizationId' is declared but its value is never read.
+src/services/databaseService.ts(296,38): error TS6133: 'organizationId' is declared but its value is never read.
+src/services/databaseService.ts(300,37): error TS6133: 'organizationId' is declared but its value is never read.
+src/services/databaseService.ts(310,25): error TS6133: 'organizationId' is declared but its value is never read.
+src/services/documentProcessor.ts(59,9): error TS2345: Argument of type '(GoogleVisionProcessingResult & { fileName: string; })[]' is not assignable to parameter of type '{ jobId: string; statusUrl: string; fileName: string; }[]'.
+  Type 'GoogleVisionProcessingResult & { fileName: string; }' is not assignable to type '{ jobId: string; statusUrl: string; fileName: string; }'.
+    Types of property 'jobId' are incompatible.
+      Type 'string | undefined' is not assignable to type 'string'.
+        Type 'undefined' is not assignable to type 'string'.
+src/services/documentProcessor.ts(60,17): error TS6133: 'result' is declared but its value is never read.
+src/services/documentRouter.ts(43,19): error TS2304: Cannot find name 'ClaudeProcessingResult'.
+src/services/documentRouter.ts(86,13): error TS2353: Object literal may only specify known properties, and 'processingTime' does not exist in type 'GoogleVisionProcessingResult'.
+src/services/documentStatusPoller.ts(107,57): error TS2345: Argument of type 'unknown' is not assignable to parameter of type 'LogContext | undefined'.
+src/services/documentStatusPoller.ts(179,53): error TS2345: Argument of type 'unknown' is not assignable to parameter of type 'LogContext | undefined'.
+src/services/documentStatusPoller.ts(201,17): error TS6133: 'jobId' is declared but its value is never read.
+src/services/documentTriagingService.ts(22,11): error TS6133: 'fileSize' is declared but its value is never read.
+src/services/errorHandler.ts(6,55): error TS6133: 'NewAppError' is declared but its value is never read.
+src/services/errorHandler.ts(6,68): error TS6133: 'ErrorSeverity' is declared but its value is never read.
+src/services/errorHandler.ts(6,83): error TS6133: 'ErrorCategory' is declared but its value is never read.
+src/services/errorHandler.ts(363,7): error TS2345: Argument of type '() => T' is not assignable to parameter of type 'T | (() => Promise<T>) | null'.
+  Type '() => T' is not assignable to type '() => Promise<T>'.
+    Type 'T' is not assignable to type 'Promise<T>'.
+src/services/errorHandler.ts(382,9): error TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.
+  Type 'undefined' is not assignable to type 'boolean'.
+src/services/errorHandler.ts(435,19): error TS2554: Expected 1-3 arguments, but got 4.
+src/services/errorHandlingService.ts(259,85): error TS2554: Expected 1-3 arguments, but got 4.
+src/services/errorHandlingService.ts(378,59): error TS6133: 'techMessage' is declared but its value is never read.
+src/services/errorHandlingService.ts(446,21): error TS2554: Expected 1-3 arguments, but got 4.
+src/services/excelProcessor.ts(7,63): error TS2307: Cannot find module './claudeVisionProcessor' or its corresponding type declarations.
+src/services/excelProcessor.ts(85,60): error TS6133: 'fileName' is declared but its value is never read.
+src/services/excelProcessor.ts(102,37): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(o: {}): string[]', gave the following error.
+    Argument of type 'unknown' is not assignable to parameter of type '{}'.
+  Overload 2 of 2, '(o: object): string[]', gave the following error.
+    Argument of type 'unknown' is not assignable to parameter of type 'object'.
+src/services/excelProcessor.ts(159,46): error TS6133: 'sheetName' is declared but its value is never read.
+src/services/flexibleValidator.ts(233,15): error TS2339: Property 'engine_info' does not exist on type 'ValidatedField'.
+src/services/flexibleValidator.ts(786,23): error TS6133: 'match' is declared but its value is never read.
+src/services/flexibleValidator.ts(790,23): error TS6133: 'match' is declared but its value is never read.
+src/services/flexibleValidator.ts(799,29): error TS6133: 'position' is declared but its value is never read.
+src/services/flexibleValidator.ts(801,11): error TS6133: 'manufacturerCode' is declared but its value is never read.
+src/services/flexibleValidator.ts(965,47): error TS6133: 'vin' is declared but its value is never read.
+src/services/multiBatchDocumentProcessor.ts(80,54): error TS2551: Property 'processBulkDocuments' does not exist on type 'DocumentProcessor'. Did you mean 'processDocuments'?
+src/services/multiBatchDocumentProcessor.ts(295,43): error TS2551: Property 'addVehicles' does not exist on type 'PersistentFleetStorage'. Did you mean 'addVehicle'?
+src/services/persistentFleetStorage.ts(5,10): error TS6133: 'eventBus' is declared but its value is never read.
+src/services/persistentFleetStorage.ts(7,10): error TS6133: 'errorHandler' is declared but its value is never read.
+src/services/postgresPersistentFleetStorage.ts(4,35): error TS2307: Cannot find module './truckNumberParser' or its corresponding type declarations.
+src/services/postgresPersistentFleetStorage.ts(7,10): error TS6133: 'eventBus' is declared but its value is never read.
+src/services/postgresPersistentFleetStorage.ts(8,1): error TS6192: All imports in import declaration are unused.
+src/services/postgresPersistentFleetStorage.ts(9,1): error TS6133: 'FIELD_NAMING_STANDARDS' is declared but its value is never read.
+src/services/postgresPersistentFleetStorage.ts(11,24): error TS6133: 'withErrorHandling' is declared but its value is never read.
+src/services/postgresPersistentFleetStorage.ts(127,26): error TS2339: Property 'getCompanyScopedKey' does not exist on type '{ getCurrentCompanyId: () => string; }'.
+src/services/postgresPersistentFleetStorage.ts(153,9): error TS2345: Argument of type '"connect"' is not assignable to parameter of type '"read" | "write" | "delete"'.
+src/services/postgresPersistentFleetStorage.ts(203,14): error TS2339: Property 'completeOperation' does not exist on type 'Logger'.
+src/services/postgresPersistentFleetStorage.ts(268,14): error TS2339: Property 'completeOperation' does not exist on type 'Logger'.
+src/services/postgresPersistentFleetStorage.ts(388,14): error TS2339: Property 'completeOperation' does not exist on type 'Logger'.
+src/services/postgresPersistentFleetStorage.ts(469,14): error TS2339: Property 'completeOperation' does not exist on type 'Logger'.
+src/services/postgresPersistentFleetStorage.ts(605,11): error TS6133: 'generateId' is declared but its value is never read.
+src/services/reconcilerAPI.ts(7,34): error TS6133: 'VehicleRecord' is declared but its value is never read.
+src/services/reconcilerAPI.ts(8,10): error TS6133: 'eventBus' is declared but its value is never read.
+src/services/reconcilerAPI.ts(106,76): error TS2554: Expected 1-3 arguments, but got 4.
+src/services/reconcilerAPI.ts(635,90): error TS2554: Expected 1-3 arguments, but got 4.
+src/services/reportingService.ts(67,45): error TS2339: Property 'getFleet' does not exist on type 'PersistentFleetStorage'.
+src/services/reportingService.ts(81,19): error TS2339: Property 'registrationExpiry' does not exist on type 'VehicleRecord'.
+src/services/reportingService.ts(82,45): error TS2339: Property 'registrationExpiry' does not exist on type 'VehicleRecord'.
+src/services/reportingService.ts(99,19): error TS2339: Property 'insuranceExpiry' does not exist on type 'VehicleRecord'.
+src/services/reportingService.ts(100,45): error TS2339: Property 'insuranceExpiry' does not exist on type 'VehicleRecord'.
+src/services/reportingService.ts(166,44): error TS2339: Property 'getDrivers' does not exist on type 'PersistentFleetStorage'.
+src/services/reportingService.ts(175,21): error TS7006: Parameter 'driver' implicitly has an 'any' type.
+src/services/reportingService.ts(258,45): error TS2339: Property 'getFleet' does not exist on type 'PersistentFleetStorage'.
+src/services/reportingService.ts(259,44): error TS2339: Property 'getDrivers' does not exist on type 'PersistentFleetStorage'.
+src/services/reportingService.ts(268,19): error TS2339: Property 'registrationExpiry' does not exist on type 'VehicleRecord'.
+src/services/reportingService.ts(269,45): error TS2339: Property 'registrationExpiry' does not exist on type 'VehicleRecord'.
+src/services/reportingService.ts(278,37): error TS2339: Property 'registrationExpiry' does not exist on type 'VehicleRecord'.
+src/services/reportingService.ts(287,19): error TS2339: Property 'insuranceExpiry' does not exist on type 'VehicleRecord'.
+src/services/reportingService.ts(288,45): error TS2339: Property 'insuranceExpiry' does not exist on type 'VehicleRecord'.
+src/services/reportingService.ts(297,37): error TS2339: Property 'insuranceExpiry' does not exist on type 'VehicleRecord'.
+src/services/reportingService.ts(307,21): error TS7006: Parameter 'driver' implicitly has an 'any' type.
+src/services/reportingService.ts(447,45): error TS2339: Property 'getFleet' does not exist on type 'PersistentFleetStorage'.
+src/services/reportingService.ts(448,44): error TS2339: Property 'getDrivers' does not exist on type 'PersistentFleetStorage'.
+src/services/reportingService.ts(466,19): error TS2339: Property 'registrationExpiry' does not exist on type 'VehicleRecord'.
+src/services/reportingService.ts(470,45): error TS2339: Property 'registrationExpiry' does not exist on type 'VehicleRecord'.
+src/services/reportingService.ts(487,19): error TS2339: Property 'insuranceExpiry' does not exist on type 'VehicleRecord'.
+src/services/reportingService.ts(491,45): error TS2339: Property 'insuranceExpiry' does not exist on type 'VehicleRecord'.
+src/services/reportingService.ts(509,21): error TS7006: Parameter 'driver' implicitly has an 'any' type.
+src/services/serverDiscovery.ts(19,20): error TS6133: 'SERVICE_NAME' is declared but its value is never read.
+src/services/serverDiscovery.ts(244,48): error TS2531: Object is possibly 'null'.
+src/services/serverDiscovery.ts(245,7): error TS2531: Object is possibly 'null'.
+src/services/storageManager.ts(226,49): error TS2339: Property 'query' does not exist on type 'DatabaseService'.
+src/services/storageTransition.ts(81,14): error TS2339: Property 'completeOperation' does not exist on type 'Logger'.
+src/services/storageTransition.ts(89,9): error TS2345: Argument of type '"initialize"' is not assignable to parameter of type '"read" | "write" | "delete"'.
+src/services/storageTransition.ts(133,50): error TS2339: Property 'getFleet' does not exist on type 'PersistentFleetStorage'.
+src/services/storageTransition.ts(134,52): error TS2339: Property 'getDrivers' does not exist on type 'PersistentFleetStorage'.
+src/services/storageTransition.ts(160,57): error TS7006: Parameter 'vehicle' implicitly has an 'any' type.
+src/services/storageTransition.ts(177,14): error TS2339: Property 'completeOperation' does not exist on type 'Logger'.
+src/services/storageTransition.ts(192,9): error TS2345: Argument of type '"migrate"' is not assignable to parameter of type '"read" | "write" | "delete"'.
+src/services/storageTransition.ts(266,44): error TS2339: Property 'getFleet' does not exist on type 'PersistentFleetStorage'.
+src/services/storageTransition.ts(267,46): error TS2339: Property 'getDrivers' does not exist on type 'PersistentFleetStorage'.
+src/services/storageTransition.ts(287,44): error TS2339: Property 'getFleet' does not exist on type 'PersistentFleetStorage'.
+src/services/storageTransition.ts(288,46): error TS2339: Property 'getDrivers' does not exist on type 'PersistentFleetStorage'.
+src/services/storageTransition.ts(352,72): error TS2353: Object literal may only specify known properties, and 'error' does not exist in type 'LogContext'.
+src/services/storageTransition.ts(353,35): error TS2339: Property 'getFleet' does not exist on type 'PersistentFleetStorage'.
+src/services/storageTransition.ts(361,72): error TS2353: Object literal may only specify known properties, and 'error' does not exist in type 'LogContext'.
+src/services/storageTransition.ts(370,72): error TS2353: Object literal may only specify known properties, and 'error' does not exist in type 'LogContext'.
+src/services/storageTransition.ts(379,72): error TS2353: Object literal may only specify known properties, and 'error' does not exist in type 'LogContext'.
+src/services/testFramework.ts(166,58): error TS2551: Property 'processBulkDocuments' does not exist on type 'DocumentProcessor'. Did you mean 'processDocuments'?
+src/services/testFramework.ts(386,46): error TS2551: Property 'processBulkDocuments' does not exist on type 'DocumentProcessor'. Did you mean 'processDocuments'?
+src/services/testFramework.ts(421,46): error TS2551: Property 'processBulkDocuments' does not exist on type 'DocumentProcessor'. Did you mean 'processDocuments'?
+src/services/testFramework.ts(467,46): error TS2551: Property 'processBulkDocuments' does not exist on type 'DocumentProcessor'. Did you mean 'processDocuments'?
+src/services/testFramework.ts(507,46): error TS2551: Property 'processBulkDocuments' does not exist on type 'DocumentProcessor'. Did you mean 'processDocuments'?
+src/services/testFramework.ts(543,46): error TS2551: Property 'processBulkDocuments' does not exist on type 'DocumentProcessor'. Did you mean 'processDocuments'?
+src/services/testFramework.ts(599,46): error TS2551: Property 'processBulkDocuments' does not exist on type 'DocumentProcessor'. Did you mean 'processDocuments'?
+src/services/testFramework.ts(705,48): error TS2551: Property 'processBulkDocuments' does not exist on type 'DocumentProcessor'. Did you mean 'processDocuments'?
+src/services/testFramework.ts(748,48): error TS2551: Property 'processBulkDocuments' does not exist on type 'DocumentProcessor'. Did you mean 'processDocuments'?
+src/utils/fieldStandardization.ts(8,3): error TS6133: 'FIELD_NAMING_STANDARDS' is declared but its value is never read.
+src/utils/fieldStandardization.ts(219,58): error TS6133: 'source' is declared but its value is never read.
+src/utils/fieldStandardization.ts(415,44): error TS6133: 'category' is declared but its value is never read.

@@ -1,0 +1,49 @@
+﻿ D src/TestApp.tsx
+ D src/TestApp10.tsx
+ D src/TestApp11.tsx
+ D src/TestApp12.tsx
+ D src/TestApp13.tsx
+ D src/TestApp14.tsx
+ D src/TestApp15.tsx
+ D src/TestApp16.tsx
+ D src/TestApp17.tsx
+ D src/TestApp2.tsx
+ D src/TestApp3.tsx
+ D src/TestApp4.tsx
+ D src/TestApp5.tsx
+ D src/TestApp6.tsx
+ D src/TestApp7.tsx
+ D src/TestApp8.tsx
+ D src/TestApp9.tsx
+ D src/TestAppImports.tsx
+ D src/TestRealApp.tsx
+ D src/TestRealAppContent.tsx
+ D src/TestRealAppWithErrorCapture.tsx
+ M src/services/documentProcessor.ts
+?? archive/
+?? docs/refactor/
+?? documents/src-app-tsx-cleanup-summary.md
+
+ src/TestApp.tsx                     |  13 ----
+ src/TestApp10.tsx                   |  19 ------
+ src/TestApp11.tsx                   |  72 --------------------
+ src/TestApp12.tsx                   |  63 ------------------
+ src/TestApp13.tsx                   |  80 ----------------------
+ src/TestApp14.tsx                   |  67 -------------------
+ src/TestApp15.tsx                   |  96 ---------------------------
+ src/TestApp16.tsx                   |  87 ------------------------
+ src/TestApp17.tsx                   | 107 ------------------------------
+ src/TestApp2.tsx                    |  30 ---------
+ src/TestApp3.tsx                    |  35 ----------
+ src/TestApp4.tsx                    |  38 -----------
+ src/TestApp5.tsx                    |  23 -------
+ src/TestApp6.tsx                    |  30 ---------
+ src/TestApp7.tsx                    |  47 -------------
+ src/TestApp8.tsx                    |  63 ------------------
+ src/TestApp9.tsx                    |  16 -----
+ src/TestAppImports.tsx              |  65 ------------------
+ src/TestRealApp.tsx                 |  27 --------
+ src/TestRealAppContent.tsx          | 128 ------------------------------------
+ src/TestRealAppWithErrorCapture.tsx |  84 -----------------------
+ src/services/documentProcessor.ts   |   5 +-
+ 22 files changed, 4 insertions(+), 1191 deletions(-)

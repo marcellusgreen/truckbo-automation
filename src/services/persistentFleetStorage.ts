@@ -1,10 +1,11 @@
-// Persistent Fleet Storage Service - API-based
+﻿// Persistent Fleet Storage Service - API-based
 // Manages fleet data by interacting with the backend API.
 
 import { authService } from './authService';
 import { eventBus, FleetEvents } from './eventBus';
 import { logger, LogContext } from './logger';
 import { errorHandler, withErrorHandling } from './errorHandlingService';
+import { isRefactorDebugEnabled, startRefactorTimer, refactorDebugLog } from '../utils/refactorDebug';
 
 export interface VehicleRecord {
   id: string;
@@ -85,7 +86,7 @@ class PersistentFleetStorage {
     if (!session?.token) {
       // Check if user is authenticated; if not, trigger logout
       if (!authService.isAuthenticated()) {
-        console.log('🔐 Authentication expired, logging out user');
+        console.log('ðŸ” Authentication expired, logging out user');
         authService.logout();
       }
       throw new Error('No authentication token found.');
@@ -102,14 +103,32 @@ class PersistentFleetStorage {
       component: 'PersistentFleetStorage',
       operation: 'getFleetAsync'
     };
+    const stopTimer = startRefactorTimer();
     return await withErrorHandling.async(async () => {
-      const headers = await this.getAuthHeaders();
-      const response = await fetch('/api/v1/vehicles', { headers });
-      if (!response.ok) {
-        throw new Error('Failed to fetch fleet data');
+      try {
+        const headers = await this.getAuthHeaders();
+        const response = await fetch('/api/v1/vehicles', { headers });
+        if (!response.ok) {
+          throw new Error('Failed to fetch fleet data');
+        }
+        const apiResponse = await response.json();
+        const vehicles = apiResponse.data as VehicleRecord[];
+        if (isRefactorDebugEnabled()) {
+          refactorDebugLog('PersistentFleetStorage', 'getFleetAsync', {
+            durationMs: stopTimer(),
+            vehicleCount: vehicles.length
+          });
+        }
+        return vehicles;
+      } catch (error) {
+        if (isRefactorDebugEnabled()) {
+          refactorDebugLog('PersistentFleetStorage', 'getFleetAsync:error', {
+            durationMs: stopTimer(),
+            message: error instanceof Error ? error.message : String(error)
+          });
+        }
+        throw error;
       }
-      const apiResponse = await response.json();
-      return apiResponse.data as VehicleRecord[];
     }, context);
   }
 
@@ -119,21 +138,39 @@ class PersistentFleetStorage {
       component: 'PersistentFleetStorage',
       operation: 'addVehicle'
     };
+    const stopTimer = startRefactorTimer();
     return await withErrorHandling.async(async () => {
-      const headers = await this.getAuthHeaders();
-      const response = await fetch('/api/v1/vehicles', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(vehicle)
-      });
-      if (!response.ok) {
-        throw new Error('Failed to add vehicle');
+      try {
+        const headers = await this.getAuthHeaders();
+        const response = await fetch('/api/v1/vehicles', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(vehicle)
+        });
+        if (!response.ok) {
+          throw new Error('Failed to add vehicle');
+        }
+        const apiResponse = await response.json();
+        const newVehicle = apiResponse.data;
+        FleetEvents.vehicleAdded(newVehicle, 'persistentFleetStorage');
+        this.notifyListeners();
+        if (isRefactorDebugEnabled()) {
+          refactorDebugLog('PersistentFleetStorage', 'addVehicle', {
+            durationMs: stopTimer(),
+            vehicleId: newVehicle?.id,
+            caller: 'unknown'
+          });
+        }
+        return newVehicle;
+      } catch (error) {
+        if (isRefactorDebugEnabled()) {
+          refactorDebugLog('PersistentFleetStorage', 'addVehicle:error', {
+            durationMs: stopTimer(),
+            message: error instanceof Error ? error.message : String(error)
+          });
+        }
+        throw error;
       }
-      const apiResponse = await response.json();
-      const newVehicle = apiResponse.data;
-      FleetEvents.vehicleAdded(newVehicle, 'persistentFleetStorage');
-      this.notifyListeners();
-      return newVehicle;
     }, context);
   }
 
@@ -143,21 +180,38 @@ class PersistentFleetStorage {
       component: 'PersistentFleetStorage',
       operation: 'updateVehicle'
     };
+    const stopTimer = startRefactorTimer();
     return await withErrorHandling.async(async () => {
-      const headers = await this.getAuthHeaders();
-      const response = await fetch(`/api/v1/vehicles/${id}`, {
-        method: 'PUT',
-        headers,
-        body: JSON.stringify(updates)
-      });
-      if (!response.ok) {
-        throw new Error('Failed to update vehicle');
+      try {
+        const headers = await this.getAuthHeaders();
+        const response = await fetch(`/api/v1/vehicles/${id}`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify(updates)
+        });
+        if (!response.ok) {
+          throw new Error('Failed to update vehicle');
+        }
+        const apiResponse = await response.json();
+        const updatedVehicle = apiResponse.data;
+        FleetEvents.vehicleUpdated(updatedVehicle, 'persistentFleetStorage');
+        this.notifyListeners();
+        if (isRefactorDebugEnabled()) {
+          refactorDebugLog('PersistentFleetStorage', 'updateVehicle', {
+            durationMs: stopTimer(),
+            vehicleId: updatedVehicle?.id
+          });
+        }
+        return updatedVehicle;
+      } catch (error) {
+        if (isRefactorDebugEnabled()) {
+          refactorDebugLog('PersistentFleetStorage', 'updateVehicle:error', {
+            durationMs: stopTimer(),
+            message: error instanceof Error ? error.message : String(error)
+          });
+        }
+        throw error;
       }
-      const apiResponse = await response.json();
-      const updatedVehicle = apiResponse.data;
-      FleetEvents.vehicleUpdated(updatedVehicle, 'persistentFleetStorage');
-      this.notifyListeners();
-      return updatedVehicle;
     }, context);
   }
 
@@ -253,36 +307,55 @@ class PersistentFleetStorage {
       operation: 'clearFleet'
     };
 
+    const stopTimer = startRefactorTimer();
     await withErrorHandling.async(async () => {
       const headers = await this.getAuthHeaders();
       const vehicles = await this.getFleetAsync();
       const failures: string[] = [];
 
-      for (const vehicle of vehicles) {
-        try {
-          const response = await fetch(`/api/v1/vehicles/${vehicle.id}`, {
-            method: 'DELETE',
-            headers
-          });
+      try {
+        for (const vehicle of vehicles) {
+          try {
+            const response = await fetch(`/api/v1/vehicles/${vehicle.id}`, {
+              method: 'DELETE',
+              headers
+            });
 
-          if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ error: 'Failed to delete vehicle' }));
-            throw new Error(errorData.error || response.statusText);
+            if (!response.ok) {
+              const errorData = await response.json().catch(() => ({ error: 'Failed to delete vehicle' }));
+              throw new Error(errorData.error || response.statusText);
+            }
+
+            FleetEvents.vehicleDeleted(vehicle.vin, 'persistentFleetStorage');
+          } catch (error) {
+            failures.push(vehicle.vin || vehicle.id);
+            logger.error('Failed to clear vehicle during fleet reset', context, error as Error, { vehicle });
           }
-
-          FleetEvents.vehicleDeleted(vehicle.vin, 'persistentFleetStorage');
-        } catch (error) {
-          failures.push(vehicle.vin || vehicle.id);
-          logger.error('Failed to clear vehicle during fleet reset', context, error as Error, { vehicle });
         }
-      }
 
-      if (failures.length > 0) {
-        throw new Error(`Failed to remove ${failures.length} vehicle(s)`);
-      }
+        if (failures.length > 0) {
+          throw new Error(`Failed to remove ${failures.length} vehicle(s)`);
+        }
 
-      FleetEvents.fleetCleared('persistentFleetStorage');
-      this.notifyListeners();
+        FleetEvents.fleetCleared('persistentFleetStorage');
+        this.notifyListeners();
+        if (isRefactorDebugEnabled()) {
+          refactorDebugLog('PersistentFleetStorage', 'clearFleet', {
+            durationMs: stopTimer(),
+            processed: vehicles.length,
+            failures: failures.length
+          });
+        }
+      } catch (error) {
+        if (isRefactorDebugEnabled()) {
+          refactorDebugLog('PersistentFleetStorage', 'clearFleet:error', {
+            durationMs: stopTimer(),
+            failures: failures.length,
+            message: error instanceof Error ? error.message : String(error)
+          });
+        }
+        throw error;
+      }
     }, context);
   }
   subscribe(listener: () => void): () => void {

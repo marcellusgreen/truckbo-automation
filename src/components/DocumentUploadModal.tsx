@@ -3,6 +3,7 @@
 
 import React, { useState, useRef } from 'react';
 import { documentProcessor, ProcessingResult, ExtractedVehicleData } from '../services/documentProcessor';
+import { isRefactorDebugEnabled, refactorDebugLog } from '../utils/refactorDebug';
 
 interface DocumentUploadModalProps {
   isOpen: boolean;
@@ -25,6 +26,11 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const logModal = (event: string, details?: Record<string, unknown>) => {
+    if (isRefactorDebugEnabled()) {
+      refactorDebugLog('DocumentUploadModal', event, details);
+    }
+  };
 
   const resetModal = () => {
     setStep('upload');
@@ -36,6 +42,7 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
   };
 
   const handleClose = () => {
+    logModal('modal:close');
     resetModal();
     onClose();
   };
@@ -44,7 +51,9 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
     if (files && files.length > 0) {
       setSelectedFiles(files);
       setError(null);
-      console.log(`📁 Selected ${files.length} files for processing`);
+      logModal('select-files', { fileCount: files.length });
+    } else {
+      logModal('select-files:empty');
     }
   };
 
@@ -58,6 +67,7 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
 
   const startProcessing = async () => {
     if (!selectedFiles) {
+      logModal('processing:no-files');
       setError('Please select files to process');
       return;
     }
@@ -68,52 +78,57 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
     setError(null);
 
     try {
-      console.log(`🚀 Starting Google Vision processing for ${selectedFiles.length} files`);
-      
+      logModal('processing:start', { fileCount: selectedFiles.length });
+
       const result = await documentProcessor.processDocuments(
         selectedFiles,
         (progress, message) => {
           setProcessingProgress(progress);
-          console.log(`📈 Progress: ${progress}% - ${message}`);
+          logModal('processing:progress', { progress, message });
         }
       );
-      
+
       setProcessingProgress(100);
-      
+
       setProcessingResult(result);
       setStep('review');
-      
-      console.log(`✅ Processing complete: ${result.summary.processed} files processed`);
-      
+
+      logModal('processing:complete', {
+        processed: result.summary.processed,
+        errors: result.errors.length
+      });
     } catch (error) {
-      setError(error instanceof Error ? error.message : 'Processing failed');
+      const message = error instanceof Error ? error.message : 'Processing failed';
+      setError(message);
+      logModal('processing:error', { message });
       setStep('upload');
     } finally {
       setIsProcessing(false);
     }
   };
-
   const acceptResults = () => {
     if (processingResult) {
       onDocumentsProcessed(processingResult.vehicleData);
       setStep('complete');
-      
-      // **HIGH PRIORITY FIX: Clear cache and trigger refresh**
-      console.log('🔄 Clearing reconciler cache and triggering data refresh...');
-      
-      // Clear reconciler API cache to force fresh data fetch
-      import('../services/reconcilerAPI').then(({ reconcilerAPI }) => {
-        reconcilerAPI.clearCache();
-        console.log('✅ ReconcilerAPI cache cleared');
+      logModal('accept:results', {
+        vehicleCount: processingResult.vehicleData.length,
+        errorCount: processingResult.errors.length
       });
-      
-      // Auto-close after showing success
+
+      logModal('accept:clear-cache');
+      import('../services/reconcilerAPI')
+        .then(({ reconcilerAPI }) => {
+          reconcilerAPI.clearCache();
+          logModal('accept:cache-cleared');
+        })
+        .catch((cacheError) => {
+          const message = cacheError instanceof Error ? cacheError.message : 'Unknown cache clear error';
+          logModal('accept:cache-error', { message });
+        });
+
       setTimeout(() => {
         handleClose();
-        
-        // **Trigger parent component refresh after modal closes**
-        console.log('🔄 Triggering parent component data refresh...');
-        // The onDocumentsProcessed callback should handle the refresh
+        logModal('accept:trigger-refresh');
       }, 2000);
     }
   };

@@ -3,6 +3,7 @@
 
 import { logger } from './logger';
 import { authService } from './authService';
+import { isRefactorDebugEnabled, refactorDebugLog } from '../utils/refactorDebug';
 
 export interface AsyncJobStatus {
   jobId: string;
@@ -13,14 +14,17 @@ export interface AsyncJobStatus {
   error?: string;
 }
 
+const logPoller = (event: string, details?: Record<string, unknown>) => {
+  if (isRefactorDebugEnabled()) {
+    refactorDebugLog('DocumentStatusPoller', event, details);
+  }
+};
+
 class DocumentStatusPoller {
-  private pollingInterval = 5000; // 5 seconds
-  private maxPollingAttempts = 60; // 5 minutes total
+  private pollingInterval = 5000;
+  private maxPollingAttempts = 60;
   private activePolls = new Map<string, NodeJS.Timeout>();
 
-  /**
-   * Start polling for a single async job
-   */
   async pollJobStatus(
     jobId: string,
     statusUrl: string,
@@ -29,7 +33,8 @@ class DocumentStatusPoller {
     onComplete?: (result: any) => void,
     onError?: (error: string) => void
   ): Promise<AsyncJobStatus> {
-    logger.info(`🔄 Starting status polling for job: ${jobId}`);
+    logger.info('Starting status polling for job: ' + jobId);
+    logPoller('poll:start', { jobId, statusUrl, fileName });
 
     let attempts = 0;
 
@@ -40,14 +45,12 @@ class DocumentStatusPoller {
         try {
           const baseUrl = import.meta.env.DEV ? '' : window.location.origin;
           const session = authService.getCurrentSession();
-          const headers: HeadersInit = session?.token ? { Authorization: `Bearer ${session.token}` } : {};
+          const headers: HeadersInit = session?.token ? { Authorization: 'Bearer ' + session.token } : {};
 
-          const response = await fetch(`${baseUrl}${statusUrl}`, {
-            headers,
-          });
+          const response = await fetch(baseUrl + statusUrl, { headers });
 
           if (!response.ok) {
-            throw new Error(`Status check failed: ${response.status} ${response.statusText}`);
+            throw new Error('Status check failed: ' + response.status + ' ' + response.statusText);
           }
 
           const data = await response.json();
@@ -61,15 +64,20 @@ class DocumentStatusPoller {
             error: data.error?.message
           };
 
-          logger.info(`📊 Job ${jobId} status: ${status.status} (attempt ${attempts})`);
+          logger.info('Job ' + jobId + ' status: ' + status.status + ' (attempt ' + attempts + ')');
+          logPoller('poll:update', {
+            jobId,
+            status: status.status,
+            attempt: attempts
+          });
 
-          // Notify status change callback
           if (onStatusChange) {
             onStatusChange(status);
           }
 
           if (status.status === 'succeeded') {
-            logger.info(`✅ Job ${jobId} completed successfully`);
+            logger.info('Job ' + jobId + ' completed successfully');
+            logPoller('poll:success', { jobId, attempts });
             this.clearPolling(jobId);
             if (onComplete) {
               onComplete(status.result);
@@ -79,7 +87,8 @@ class DocumentStatusPoller {
           }
 
           if (status.status === 'failed') {
-            logger.error(`❌ Job ${jobId} failed: ${status.error}`);
+            logger.error('Job ' + jobId + ' failed: ' + status.error);
+            logPoller('poll:failed', { jobId, attempts, error: status.error });
             this.clearPolling(jobId);
             if (onError) {
               onError(status.error || 'Processing failed');
@@ -88,9 +97,10 @@ class DocumentStatusPoller {
             return;
           }
 
-          // Still processing - continue polling
           if (attempts >= this.maxPollingAttempts) {
-            logger.error(`⏱️ Job ${jobId} polling timeout after ${attempts} attempts`);
+            const message = 'Job ' + jobId + ' polling timeout after ' + attempts + ' attempts';
+            logger.error(message);
+            logPoller('poll:timeout', { jobId, attempts });
             this.clearPolling(jobId);
             if (onError) {
               onError('Processing timeout');
@@ -99,12 +109,15 @@ class DocumentStatusPoller {
             return;
           }
 
-          // Schedule next poll
           const timeoutId = setTimeout(pollFunction, this.pollingInterval);
           this.activePolls.set(jobId, timeoutId);
-
         } catch (error) {
-          logger.error(`❌ Error polling job ${jobId}:`, error);
+          logger.error('Error polling job ' + jobId + ':', error as Error);
+          logPoller('poll:error', {
+            jobId,
+            attempts,
+            message: error instanceof Error ? error.message : 'Unknown polling error'
+          });
 
           if (attempts >= this.maxPollingAttempts) {
             this.clearPolling(jobId);
@@ -115,27 +128,23 @@ class DocumentStatusPoller {
             return;
           }
 
-          // Retry on error
           const timeoutId = setTimeout(pollFunction, this.pollingInterval);
           this.activePolls.set(jobId, timeoutId);
         }
       };
 
-      // Start polling immediately
       pollFunction();
     });
   }
 
-  /**
-   * Poll multiple jobs concurrently
-   */
   async pollMultipleJobs(
     jobs: { jobId: string; statusUrl: string; fileName: string }[],
     onJobComplete?: (jobId: string, result: any) => void,
     onJobError?: (jobId: string, error: string) => void,
     onAllComplete?: (results: { [jobId: string]: any }) => void
   ): Promise<{ [jobId: string]: any }> {
-    logger.info(`🔄 Starting polling for ${jobs.length} async jobs`);
+    logger.info('Starting polling for ' + jobs.length + ' async jobs');
+    logPoller('batch:start', { jobCount: jobs.length });
 
     const results: { [jobId: string]: any } = {};
     let completedCount = 0;
@@ -145,10 +154,11 @@ class DocumentStatusPoller {
         job.jobId,
         job.statusUrl,
         job.fileName,
-        undefined, // onStatusChange
+        undefined,
         (result) => {
           results[job.jobId] = result;
           completedCount++;
+          logPoller('batch:job-complete', { jobId: job.jobId, completedCount, total: jobs.length });
 
           if (onJobComplete) {
             onJobComplete(job.jobId, result);
@@ -160,6 +170,7 @@ class DocumentStatusPoller {
         },
         (error) => {
           completedCount++;
+          logPoller('batch:job-error', { jobId: job.jobId, completedCount, total: jobs.length, error });
 
           if (onJobError) {
             onJobError(job.jobId, error);
@@ -174,16 +185,15 @@ class DocumentStatusPoller {
 
     try {
       await Promise.allSettled(promises);
+      logPoller('batch:complete', { jobCount: jobs.length });
       return results;
     } catch (error) {
-      logger.error('❌ Error in multi-job polling:', error);
+      logger.error('Error in multi-job polling:', error as Error);
+      logPoller('batch:error', { message: error instanceof Error ? error.message : 'Unknown error' });
       throw error;
     }
   }
 
-  /**
-   * Clear polling for a specific job
-   */
   private clearPolling(jobId: string): void {
     const timeoutId = this.activePolls.get(jobId);
     if (timeoutId) {
@@ -192,22 +202,17 @@ class DocumentStatusPoller {
     }
   }
 
-  /**
-   * Stop all active polling
-   */
   stopAllPolling(): void {
-    logger.info(`🛑 Stopping ${this.activePolls.size} active polling operations`);
+    logger.info('Stopping ' + this.activePolls.size + ' active polling operations');
+    logPoller('batch:stop-all', { activeJobs: this.activePolls.size });
 
-    for (const [jobId, timeoutId] of this.activePolls.entries()) {
+    for (const [, timeoutId] of this.activePolls.entries()) {
       clearTimeout(timeoutId);
     }
 
     this.activePolls.clear();
   }
 
-  /**
-   * Get status of all active polls
-   */
   getActivePolls(): string[] {
     return Array.from(this.activePolls.keys());
   }
