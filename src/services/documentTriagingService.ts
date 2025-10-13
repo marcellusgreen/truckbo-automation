@@ -19,7 +19,6 @@ export class DocumentTriagingService {
   static analyzeFile(file: File): TriagingResult {
     const fileName = file.name.toLowerCase();
     const fileType = file.type;
-    const fileSize = file.size;
 
     // Check for Excel/CSV files - route to CLAUDE_CODE
     if (this.isStructuredDataFile(fileType, fileName)) {

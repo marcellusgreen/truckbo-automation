@@ -1,7 +1,9 @@
-// Comprehensive Reporting Service
-// Generates compliance reports for fleet management
+// Compliance Reporting Service (refactored for centralized fleet adapter)
+// Provides async helpers to generate vehicle/driver compliance reports and export artifacts.
 
-import { persistentFleetStorage, VehicleRecord, DriverRecord } from './persistentFleetStorage';
+import { fleetStorageAdapter } from './fleetStorageAdapter';
+import { centralizedFleetDataService, type UnifiedVehicleData } from './centralizedFleetDataService';
+import { persistentFleetStorage, type DriverRecord } from './persistentFleetStorage';
 import { errorHandler } from './errorHandler';
 
 export interface ComplianceReport {
@@ -58,83 +60,142 @@ export interface ComplianceMetrics {
   };
 }
 
+type VehicleComplianceBucket = 'compliant' | 'expiring' | 'nonCompliant';
+
+const DEFAULT_GENERATED_BY = 'TruckBo System';
+
 class ComplianceReportingService {
-  
-  /**
-   * Generate vehicle compliance report
-   */
-  generateVehicleComplianceReport(dateRange?: { from: string; to: string }): ComplianceReport {
-    const vehicles = persistentFleetStorage.getFleet();
-    const reportDate = new Date().toISOString();
-    
-    const compliantVehicles: VehicleRecord[] = [];
-    const nonCompliantVehicles: VehicleRecord[] = [];
-    const expiringVehicles: VehicleRecord[] = [];
+  private async fetchVehicles(): Promise<UnifiedVehicleData[]> {
+    try {
+      const cached = centralizedFleetDataService.getVehicles();
+      if (cached.length > 0) {
+        return cached;
+      }
+
+      await centralizedFleetDataService.initializeData();
+      const refreshed = centralizedFleetDataService.getVehicles();
+      if (refreshed.length > 0) {
+        return refreshed;
+      }
+    } catch (error) {
+      console.warn('[ReportingService] Centralized fleet data unavailable, using adapter fallback', error);
+    }
+
+    return await fleetStorageAdapter.getFleet();
+  }
+
+  private async fetchDrivers(): Promise<DriverRecord[]> {
+    try {
+      return await persistentFleetStorage.getDriversAsync();
+    } catch (error) {
+      console.warn('[ReportingService] Driver data unavailable', error);
+      return [];
+    }
+  }
+
+  private getDateRange(input?: { from: string; to: string }) {
+    if (input) {
+      return input;
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+    return { from: today, to: today };
+  }
+
+  private getDaysUntil(expiration?: string | null): number | null {
+    if (!expiration) {
+      return null;
+    }
+    const date = new Date(expiration);
+    if (Number.isNaN(date.getTime())) {
+      return null;
+    }
+    const diff = date.getTime() - Date.now();
+    return Math.ceil(diff / (1000 * 60 * 60 * 24));
+  }
+
+  private classifyVehicle(vehicle: UnifiedVehicleData): {
+    bucket: VehicleComplianceBucket;
+    criticalIssues: string[];
+    recommendations: string[];
+  } {
+    const criticalIssues: string[] = [];
+    const recommendations: string[] = [];
+    const label = vehicle.truckNumber || vehicle.vin || 'Unknown Vehicle';
+
+    const metadata = (vehicle.complianceData as Record<string, any>) ?? {};
+    const registrationExpiry =
+      vehicle.registrationExpirationDate ?? metadata.registrationExpirationDate ?? metadata.registration?.expirationDate ?? null;
+    const insuranceExpiry =
+      vehicle.insuranceExpirationDate ?? metadata.insuranceExpirationDate ?? metadata.insurance?.expirationDate ?? null;
+
+    const registrationDays = this.getDaysUntil(registrationExpiry);
+    const insuranceDays = this.getDaysUntil(insuranceExpiry);
+
+    let bucket: VehicleComplianceBucket = 'compliant';
+
+    if (registrationDays === null) {
+      bucket = 'nonCompliant';
+      criticalIssues.push(`${label}: Missing registration expiration date`);
+    } else if (registrationDays < 0) {
+      bucket = 'nonCompliant';
+      criticalIssues.push(`${label}: Registration expired ${Math.abs(registrationDays)} days ago`);
+    } else if (registrationDays <= 30) {
+      bucket = 'expiring';
+      recommendations.push(`${label}: Registration expires in ${registrationDays} days`);
+    }
+
+    if (insuranceDays === null) {
+      bucket = 'nonCompliant';
+      criticalIssues.push(`${label}: Missing insurance expiration date`);
+    } else if (insuranceDays < 0) {
+      bucket = 'nonCompliant';
+      criticalIssues.push(`${label}: Insurance expired ${Math.abs(insuranceDays)} days ago`);
+    } else if (insuranceDays <= 15 && bucket !== 'nonCompliant') {
+      bucket = 'expiring';
+      recommendations.push(`${label}: Insurance expires in ${insuranceDays} days`);
+    }
+
+    if (!vehicle.vin) {
+      bucket = 'nonCompliant';
+      criticalIssues.push(`${label}: Missing VIN`);
+    }
+
+    return { bucket, criticalIssues, recommendations };
+  }
+
+  async generateVehicleComplianceReport(dateRange?: { from: string; to: string }): Promise<ComplianceReport> {
+    const vehicles = await this.fetchVehicles();
+    const compliant: UnifiedVehicleData[] = [];
+    const nonCompliant: UnifiedVehicleData[] = [];
+    const expiring: UnifiedVehicleData[] = [];
     const criticalIssues: string[] = [];
     const recommendations: string[] = [];
 
-    vehicles.forEach((vehicle: VehicleRecord) => {
-      let isCompliant = true;
-      let isExpiring = false;
+    vehicles.forEach(vehicle => {
+      const result = this.classifyVehicle(vehicle);
+      criticalIssues.push(...result.criticalIssues);
+      recommendations.push(...result.recommendations);
 
-      // Check registration compliance
-      if (vehicle.registrationExpiry) {
-        const expiryDate = new Date(vehicle.registrationExpiry);
-        const today = new Date();
-        const daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-
-        if (daysUntilExpiry < 0) {
-          isCompliant = false;
-          criticalIssues.push(`${vehicle.truckNumber}: Registration expired ${Math.abs(daysUntilExpiry)} days ago`);
-        } else if (daysUntilExpiry <= 30) {
-          isExpiring = true;
-          recommendations.push(`${vehicle.truckNumber}: Registration expires in ${daysUntilExpiry} days - schedule renewal`);
-        }
-      } else {
-        isCompliant = false;
-        criticalIssues.push(`${vehicle.truckNumber}: Missing registration expiry date`);
-      }
-
-      // Check insurance compliance
-      if (vehicle.insuranceExpiry) {
-        const expiryDate = new Date(vehicle.insuranceExpiry);
-        const today = new Date();
-        const daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-
-        if (daysUntilExpiry < 0) {
-          isCompliant = false;
-          criticalIssues.push(`${vehicle.truckNumber}: Insurance expired ${Math.abs(daysUntilExpiry)} days ago`);
-        } else if (daysUntilExpiry <= 15) {
-          isExpiring = true;
-          recommendations.push(`${vehicle.truckNumber}: Insurance expires in ${daysUntilExpiry} days - renew immediately`);
-        }
-      } else {
-        isCompliant = false;
-        criticalIssues.push(`${vehicle.truckNumber}: Missing insurance information`);
-      }
-
-      // Check for required fields
-      if (!vehicle.vin) {
-        isCompliant = false;
-        criticalIssues.push(`${vehicle.truckNumber}: Missing VIN`);
-      }
-
-      // Categorize vehicle
-      if (!isCompliant) {
-        nonCompliantVehicles.push(vehicle);
-      } else if (isExpiring) {
-        expiringVehicles.push(vehicle);
-      } else {
-        compliantVehicles.push(vehicle);
+      switch (result.bucket) {
+        case 'compliant':
+          compliant.push(vehicle);
+          break;
+        case 'expiring':
+          expiring.push(vehicle);
+          break;
+        case 'nonCompliant':
+          nonCompliant.push(vehicle);
+          break;
       }
     });
 
     const summary: ReportSummary = {
       totalVehicles: vehicles.length,
-      compliantCount: compliantVehicles.length,
-      nonCompliantCount: nonCompliantVehicles.length,
-      expiringCount: expiringVehicles.length,
-      criticalIssues: criticalIssues.slice(0, 10), // Top 10 critical issues
+      compliantCount: compliant.length,
+      nonCompliantCount: nonCompliant.length,
+      expiringCount: expiring.length,
+      criticalIssues: criticalIssues.slice(0, 10),
       recommendations: recommendations.slice(0, 10)
     };
 
@@ -142,90 +203,70 @@ class ComplianceReportingService {
       id: `vehicle_compliance_${Date.now()}`,
       title: 'Vehicle Compliance Report',
       type: 'vehicle_compliance',
-      generatedAt: reportDate,
-      generatedBy: 'TruckBo System',
-      dateRange: dateRange || {
-        from: new Date().toISOString().split('T')[0],
-        to: new Date().toISOString().split('T')[0]
-      },
+      generatedAt: new Date().toISOString(),
+      generatedBy: DEFAULT_GENERATED_BY,
+      dateRange: this.getDateRange(dateRange),
       data: {
-        compliantVehicles,
-        nonCompliantVehicles,
-        expiringVehicles,
-        totalVehicles: vehicles.length
+        compliantVehicles: compliant,
+        nonCompliantVehicles: nonCompliant,
+        expiringVehicles: expiring
       },
       summary,
       exportFormats: ['PDF', 'Excel', 'CSV']
     };
   }
 
-  /**
-   * Generate driver compliance report
-   */
-  generateDriverComplianceReport(dateRange?: { from: string; to: string }): ComplianceReport {
-    const drivers = persistentFleetStorage.getDrivers();
-    const reportDate = new Date().toISOString();
-    
-    const compliantDrivers: DriverRecord[] = [];
-    const nonCompliantDrivers: DriverRecord[] = [];
-    const expiringDrivers: DriverRecord[] = [];
+  async generateDriverComplianceReport(dateRange?: { from: string; to: string }): Promise<ComplianceReport> {
+    const drivers = await this.fetchDrivers();
+    const compliant: DriverRecord[] = [];
+    const nonCompliant: DriverRecord[] = [];
+    const expiring: DriverRecord[] = [];
     const criticalIssues: string[] = [];
     const recommendations: string[] = [];
 
     drivers.forEach(driver => {
-      let isCompliant = true;
-      let isExpiring = false;
-      const driverName = `${driver.firstName} ${driver.lastName}`;
+      const driverName = `${driver.firstName ?? ''} ${driver.lastName ?? ''}`.trim() || 'Unknown Driver';
 
-      // Check medical certificate compliance
-      if (driver.medicalCertificate) {
-        if (driver.medicalCertificate.status === 'expired') {
-          isCompliant = false;
-          criticalIssues.push(`${driverName}: Medical certificate expired ${Math.abs(driver.medicalCertificate.daysUntilExpiry)} days ago`);
-        } else if (driver.medicalCertificate.status === 'expiring_soon') {
-          isExpiring = true;
-          recommendations.push(`${driverName}: Medical certificate expires in ${driver.medicalCertificate.daysUntilExpiry} days`);
-        }
-      } else {
-        isCompliant = false;
-        criticalIssues.push(`${driverName}: Missing medical certificate`);
+      const medicalStatus = (driver.medicalCertificate as Record<string, any>)?.status;
+      const medicalDays = this.getDaysUntil((driver.medicalCertificate as Record<string, any>)?.expirationDate);
+      const cdlStatus = (driver.cdlInfo as Record<string, any>)?.status;
+      const cdlDays = this.getDaysUntil((driver.cdlInfo as Record<string, any>)?.expirationDate);
+
+      const medicalExpired = medicalStatus === 'expired' || (medicalDays !== null && medicalDays < 0);
+      const medicalExpiring =
+        !medicalExpired && (medicalStatus === 'expiring_soon' || (medicalDays !== null && medicalDays <= 30));
+      const cdlExpired = cdlStatus === 'expired' || (cdlDays !== null && cdlDays < 0);
+      const cdlExpiring = !cdlExpired && (cdlStatus === 'expiring_soon' || (cdlDays !== null && cdlDays <= 30));
+
+      if (medicalExpired) {
+        criticalIssues.push(`${driverName}: Medical certificate expired`);
+      } else if (medicalExpiring) {
+        recommendations.push(`${driverName}: Medical certificate expires in ${medicalDays ?? 0} days`);
       }
 
-      // Check CDL compliance
-      if (driver.cdlInfo) {
-        if (driver.cdlInfo.status === 'expired') {
-          isCompliant = false;
-          criticalIssues.push(`${driverName}: CDL expired ${Math.abs(driver.cdlInfo.daysUntilExpiry)} days ago`);
-        } else if (driver.cdlInfo.status === 'expiring_soon') {
-          isExpiring = true;
-          recommendations.push(`${driverName}: CDL expires in ${driver.cdlInfo.daysUntilExpiry} days`);
-        }
-      } else {
-        isCompliant = false;
-        criticalIssues.push(`${driverName}: Missing CDL information`);
+      if (cdlExpired) {
+        criticalIssues.push(`${driverName}: CDL expired`);
+      } else if (cdlExpiring) {
+        recommendations.push(`${driverName}: CDL expires in ${cdlDays ?? 0} days`);
       }
 
-      // Check required fields
-      if (!driver.employeeId) {
-        isCompliant = false;
-        criticalIssues.push(`${driverName}: Missing employee ID`);
-      }
+      const hasNonCompliance = medicalExpired || cdlExpired;
+      const hasExpiringRisk = !hasNonCompliance && (medicalExpiring || cdlExpiring);
 
-      // Categorize driver
-      if (!isCompliant) {
-        nonCompliantDrivers.push(driver);
-      } else if (isExpiring) {
-        expiringDrivers.push(driver);
+      if (hasNonCompliance) {
+        nonCompliant.push(driver);
+      } else if (hasExpiringRisk) {
+        expiring.push(driver);
       } else {
-        compliantDrivers.push(driver);
+        compliant.push(driver);
       }
     });
 
     const summary: ReportSummary = {
       totalDrivers: drivers.length,
-      compliantCount: compliantDrivers.length,
-      nonCompliantCount: nonCompliantDrivers.length,
-      expiringCount: expiringDrivers.length,
+      compliantCount: compliant.length,
+      nonCompliantCount: nonCompliant.length,
+      expiringCount: expiring.length,
       criticalIssues: criticalIssues.slice(0, 10),
       recommendations: recommendations.slice(0, 10)
     };
@@ -234,343 +275,195 @@ class ComplianceReportingService {
       id: `driver_compliance_${Date.now()}`,
       title: 'Driver Compliance Report',
       type: 'driver_compliance',
-      generatedAt: reportDate,
-      generatedBy: 'TruckBo System',
-      dateRange: dateRange || {
-        from: new Date().toISOString().split('T')[0],
-        to: new Date().toISOString().split('T')[0]
-      },
-      data: {
-        compliantDrivers,
-        nonCompliantDrivers,
-        expiringDrivers,
-        totalDrivers: drivers.length
-      },
+      generatedAt: new Date().toISOString(),
+      generatedBy: DEFAULT_GENERATED_BY,
+      dateRange: this.getDateRange(dateRange),
+      data: { compliantDrivers: compliant, nonCompliantDrivers: nonCompliant, expiringDrivers: expiring },
       summary,
       exportFormats: ['PDF', 'Excel', 'CSV']
     };
   }
 
-  /**
-   * Generate expiration summary report
-   */
-  generateExpirationSummaryReport(daysAhead: number = 90): ComplianceReport {
-    const vehicles = persistentFleetStorage.getFleet();
-    const drivers = persistentFleetStorage.getDrivers();
-    const reportDate = new Date().toISOString();
+  async generateExpirationSummaryReport(daysAhead: number = 30): Promise<ComplianceReport> {
+    const vehicles = await this.fetchVehicles();
     const alerts: ExpirationAlert[] = [];
 
-    // Check vehicle expirations
-    vehicles.forEach((vehicle: VehicleRecord) => {
-      const today = new Date();
-      
-      // Registration expiration
-      if (vehicle.registrationExpiry) {
-        const expiryDate = new Date(vehicle.registrationExpiry);
-        const daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-        
-        if (daysUntilExpiry <= daysAhead) {
-          alerts.push({
-            type: 'vehicle',
-            id: vehicle.id,
-            name: `${vehicle.truckNumber} (${vehicle.make} ${vehicle.model})`,
-            documentType: 'registration',
-            expirationDate: vehicle.registrationExpiry,
-            daysUntilExpiry,
-            status: daysUntilExpiry < 0 ? 'expired' : daysUntilExpiry <= 30 ? 'critical' : 'expires_soon',
-            priority: daysUntilExpiry < 0 ? 'critical' : daysUntilExpiry <= 15 ? 'critical' : daysUntilExpiry <= 30 ? 'high' : 'medium'
-          });
-        }
-      }
+    vehicles.forEach(vehicle => {
+      const label = vehicle.truckNumber || vehicle.vin || 'Unknown Vehicle';
+      const metadata = (vehicle.complianceData as Record<string, any>) ?? {};
+      const registrationExpiry =
+        vehicle.registrationExpirationDate ?? metadata.registrationExpirationDate ?? metadata.registration?.expirationDate ?? null;
+      const insuranceExpiry =
+        vehicle.insuranceExpirationDate ?? metadata.insuranceExpirationDate ?? metadata.insurance?.expirationDate ?? null;
 
-      // Insurance expiration
-      if (vehicle.insuranceExpiry) {
-        const expiryDate = new Date(vehicle.insuranceExpiry);
-        const daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-        
-        if (daysUntilExpiry <= daysAhead) {
-          alerts.push({
-            type: 'vehicle',
-            id: vehicle.id,
-            name: `${vehicle.truckNumber} (${vehicle.make} ${vehicle.model})`,
-            documentType: 'insurance',
-            expirationDate: vehicle.insuranceExpiry,
-            daysUntilExpiry,
-            status: daysUntilExpiry < 0 ? 'expired' : daysUntilExpiry <= 15 ? 'critical' : 'expires_soon',
-            priority: daysUntilExpiry < 0 ? 'critical' : daysUntilExpiry <= 7 ? 'critical' : daysUntilExpiry <= 15 ? 'high' : 'medium'
-          });
-        }
-      }
-    });
-
-    // Check driver expirations
-    drivers.forEach(driver => {
-      const driverName = `${driver.firstName} ${driver.lastName}`;
-      
-      // Medical certificate expiration
-      if (driver.medicalCertificate && driver.medicalCertificate.daysUntilExpiry <= daysAhead) {
+      const regDays = this.getDaysUntil(registrationExpiry);
+      if (regDays !== null && regDays <= daysAhead) {
         alerts.push({
-          type: 'driver',
-          id: driver.id,
-          name: driverName,
-          documentType: 'medical_certificate',
-          expirationDate: driver.medicalCertificate.expirationDate,
-          daysUntilExpiry: driver.medicalCertificate.daysUntilExpiry,
-          status: driver.medicalCertificate.status as any,
-          priority: driver.medicalCertificate.daysUntilExpiry < 0 ? 'critical' : 
-                   driver.medicalCertificate.daysUntilExpiry <= 30 ? 'high' : 'medium'
+          type: 'vehicle',
+          id: `${vehicle.vin ?? label}-registration`,
+          name: label,
+          documentType: 'registration',
+          expirationDate: registrationExpiry ?? '',
+          daysUntilExpiry: regDays,
+          status: regDays < 0 ? 'expired' : regDays <= 7 ? 'critical' : 'expires_soon',
+          priority: regDays < 0 ? 'critical' : regDays <= 7 ? 'critical' : 'high'
         });
       }
 
-      // CDL expiration
-      if (driver.cdlInfo && driver.cdlInfo.daysUntilExpiry <= daysAhead) {
+      const insDays = this.getDaysUntil(insuranceExpiry);
+      if (insDays !== null && insDays <= daysAhead) {
         alerts.push({
-          type: 'driver',
-          id: driver.id,
-          name: driverName,
-          documentType: 'cdl',
-          expirationDate: driver.cdlInfo.expirationDate,
-          daysUntilExpiry: driver.cdlInfo.daysUntilExpiry,
-          status: driver.cdlInfo.status as any,
-          priority: driver.cdlInfo.daysUntilExpiry < 0 ? 'critical' : 
-                   driver.cdlInfo.daysUntilExpiry <= 60 ? 'high' : 'medium'
+          type: 'vehicle',
+          id: `${vehicle.vin ?? label}-insurance`,
+          name: label,
+          documentType: 'insurance',
+          expirationDate: insuranceExpiry ?? '',
+          daysUntilExpiry: insDays,
+          status: insDays < 0 ? 'expired' : insDays <= 7 ? 'critical' : 'expires_soon',
+          priority: insDays < 0 ? 'critical' : insDays <= 7 ? 'critical' : 'high'
         });
       }
     });
-
-    // Sort alerts by priority and days until expiry
-    alerts.sort((a, b) => {
-      const priorityOrder = { critical: 0, high: 1, medium: 2 };
-      if (priorityOrder[a.priority] !== priorityOrder[b.priority]) {
-        return priorityOrder[a.priority] - priorityOrder[b.priority];
-      }
-      return a.daysUntilExpiry - b.daysUntilExpiry;
-    });
-
-    const criticalAlerts = alerts.filter(a => a.priority === 'critical');
-    const highAlerts = alerts.filter(a => a.priority === 'high');
 
     const summary: ReportSummary = {
       totalVehicles: vehicles.length,
-      totalDrivers: drivers.length,
-      compliantCount: vehicles.length + drivers.length - alerts.length,
-      nonCompliantCount: criticalAlerts.length,
-      expiringCount: alerts.length - criticalAlerts.length,
-      criticalIssues: criticalAlerts.slice(0, 10).map(alert => 
-        `${alert.name}: ${alert.documentType} ${alert.status} (${Math.abs(alert.daysUntilExpiry)} days)`
-      ),
-      recommendations: highAlerts.slice(0, 10).map(alert =>
-        `Schedule renewal for ${alert.name}: ${alert.documentType} expires in ${alert.daysUntilExpiry} days`
-      )
+      compliantCount: alerts.filter(alert => alert.status === 'expired').length,
+      nonCompliantCount: alerts.filter(alert => alert.status === 'expired').length,
+      expiringCount: alerts.filter(alert => alert.status !== 'expired').length,
+      criticalIssues: alerts
+        .filter(alert => alert.priority === 'critical')
+        .slice(0, 10)
+        .map(alert => `${alert.name}: ${alert.documentType} ${alert.status.replace('_', ' ')}`),
+      recommendations: alerts
+        .filter(alert => alert.priority !== 'critical')
+        .slice(0, 10)
+        .map(alert => `${alert.name}: Renew ${alert.documentType} within ${alert.daysUntilExpiry} days`)
     };
 
     return {
       id: `expiration_summary_${Date.now()}`,
-      title: `Expiration Summary Report (Next ${daysAhead} Days)`,
+      title: `Expiration Summary (${daysAhead} days)`,
       type: 'expiration_summary',
-      generatedAt: reportDate,
-      generatedBy: 'TruckBo System',
-      dateRange: {
-        from: new Date().toISOString().split('T')[0],
-        to: new Date(Date.now() + daysAhead * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-      },
+      generatedAt: new Date().toISOString(),
+      generatedBy: DEFAULT_GENERATED_BY,
+      dateRange: this.getDateRange(),
+      data: { alerts },
+      summary,
+      exportFormats: ['PDF', 'Excel', 'CSV']
+    };
+  }
+
+  async generateFullAuditReport(dateRange?: { from: string; to: string }): Promise<ComplianceReport> {
+    const [vehicleReport, driverReport, expirationReport] = await Promise.all([
+      this.generateVehicleComplianceReport(dateRange),
+      this.generateDriverComplianceReport(dateRange),
+      this.generateExpirationSummaryReport(60)
+    ]);
+
+    const summary: ReportSummary = {
+      totalVehicles: vehicleReport.summary.totalVehicles,
+      totalDrivers: driverReport.summary.totalDrivers,
+      compliantCount: (vehicleReport.summary.compliantCount || 0) + (driverReport.summary.compliantCount || 0),
+      nonCompliantCount: (vehicleReport.summary.nonCompliantCount || 0) + (driverReport.summary.nonCompliantCount || 0),
+      expiringCount: expirationReport.summary.expiringCount,
+      criticalIssues: [
+        ...vehicleReport.summary.criticalIssues,
+        ...driverReport.summary.criticalIssues,
+        ...expirationReport.summary.criticalIssues
+      ].slice(0, 10),
+      recommendations: [
+        ...vehicleReport.summary.recommendations,
+        ...driverReport.summary.recommendations,
+        ...expirationReport.summary.recommendations
+      ].slice(0, 10)
+    };
+
+    return {
+      id: `full_audit_${Date.now()}`,
+      title: 'Comprehensive Compliance Audit',
+      type: 'full_audit',
+      generatedAt: new Date().toISOString(),
+      generatedBy: DEFAULT_GENERATED_BY,
+      dateRange: this.getDateRange(dateRange),
       data: {
-        alerts,
-        daysAhead,
-        criticalAlerts: criticalAlerts.length,
-        highPriorityAlerts: highAlerts.length,
-        totalAlerts: alerts.length
+        vehicleReport,
+        driverReport,
+        expirationReport
       },
       summary,
       exportFormats: ['PDF', 'Excel', 'CSV']
     };
   }
 
-  /**
-   * Generate comprehensive audit report
-   */
-  generateFullAuditReport(): ComplianceReport {
-    const vehicleReport = this.generateVehicleComplianceReport();
-    const driverReport = this.generateDriverComplianceReport();
-    const expirationReport = this.generateExpirationSummaryReport(90);
-    const metrics = this.calculateComplianceMetrics();
-    
-    const reportDate = new Date().toISOString();
+  async calculateComplianceMetrics(): Promise<ComplianceMetrics> {
+    const [vehicleReport, driverReport, expirationReport] = await Promise.all([
+      this.generateVehicleComplianceReport(),
+      this.generateDriverComplianceReport(),
+      this.generateExpirationSummaryReport(30)
+    ]);
 
-    const combinedCriticalIssues = [
-      ...vehicleReport.summary.criticalIssues,
-      ...driverReport.summary.criticalIssues,
-      ...expirationReport.summary.criticalIssues
-    ];
+    const totalVehicleDocs =
+      (vehicleReport.data?.nonCompliantVehicles?.length ?? 0) +
+      (vehicleReport.data?.expiringVehicles?.length ?? 0) +
+      (vehicleReport.data?.compliantVehicles?.length ?? 0);
+    const totalDriverDocs =
+      (driverReport.data?.nonCompliantDrivers?.length ?? 0) +
+      (driverReport.data?.expiringDrivers?.length ?? 0) +
+      (driverReport.data?.compliantDrivers?.length ?? 0);
 
-    const combinedRecommendations = [
-      ...vehicleReport.summary.recommendations,
-      ...driverReport.summary.recommendations,
-      ...expirationReport.summary.recommendations
-    ];
+    const overallDocs = totalVehicleDocs + totalDriverDocs;
+    const compliantDocs =
+      (vehicleReport.data?.compliantVehicles?.length ?? 0) + (driverReport.data?.compliantDrivers?.length ?? 0);
 
-    const summary: ReportSummary = {
-      totalVehicles: vehicleReport.summary.totalVehicles,
-      totalDrivers: driverReport.summary.totalDrivers,
-      compliantCount: vehicleReport.summary.compliantCount + driverReport.summary.compliantCount,
-      nonCompliantCount: vehicleReport.summary.nonCompliantCount + driverReport.summary.nonCompliantCount,
-      expiringCount: vehicleReport.summary.expiringCount + driverReport.summary.expiringCount,
-      criticalIssues: combinedCriticalIssues.slice(0, 15),
-      recommendations: combinedRecommendations.slice(0, 15)
+    const documentTypes: ComplianceMetrics['documentTypes'] = {
+      registration: {
+        total: vehicleReport.data?.expiringVehicles?.length ?? 0,
+        compliant: vehicleReport.data?.compliantVehicles?.length ?? 0,
+        expiring: vehicleReport.data?.expiringVehicles?.length ?? 0,
+        expired: vehicleReport.data?.nonCompliantVehicles?.length ?? 0
+      },
+      insurance: {
+        total: vehicleReport.data?.expiringVehicles?.length ?? 0,
+        compliant: vehicleReport.data?.compliantVehicles?.length ?? 0,
+        expiring: vehicleReport.data?.expiringVehicles?.length ?? 0,
+        expired: vehicleReport.data?.nonCompliantVehicles?.length ?? 0
+      },
+      medical_certificate: {
+        total: driverReport.data?.expiringDrivers?.length ?? 0,
+        compliant: driverReport.data?.compliantDrivers?.length ?? 0,
+        expiring: driverReport.data?.expiringDrivers?.length ?? 0,
+        expired: driverReport.data?.nonCompliantDrivers?.length ?? 0
+      },
+      cdl: {
+        total: driverReport.data?.expiringDrivers?.length ?? 0,
+        compliant: driverReport.data?.compliantDrivers?.length ?? 0,
+        expiring: driverReport.data?.expiringDrivers?.length ?? 0,
+        expired: driverReport.data?.nonCompliantDrivers?.length ?? 0
+      }
     };
+
+    const criticalAlerts = expirationReport.summary.criticalIssues.length;
+    const expiringSoon = expirationReport.summary.expiringCount;
 
     return {
-      id: `full_audit_${Date.now()}`,
-      title: 'Comprehensive Fleet Compliance Audit',
-      type: 'full_audit',
-      generatedAt: reportDate,
-      generatedBy: 'TruckBo System',
-      dateRange: {
-        from: new Date().toISOString().split('T')[0],
-        to: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-      },
-      data: {
-        vehicleCompliance: vehicleReport.data,
-        driverCompliance: driverReport.data,
-        expirationAlerts: expirationReport.data,
-        metrics
-      },
-      summary,
-      exportFormats: ['PDF', 'Excel']
-    };
-  }
-
-  /**
-   * Calculate compliance metrics
-   */
-  calculateComplianceMetrics(): ComplianceMetrics {
-    const vehicles = persistentFleetStorage.getFleet();
-    const drivers = persistentFleetStorage.getDrivers();
-    
-    let totalCompliant = 0;
-    let totalDocuments = 0;
-    let criticalAlerts = 0;
-    let highPriorityAlerts = 0;
-    let expiringSoon = 0;
-
-    const documentTypes: { [key: string]: any } = {
-      registration: { total: 0, compliant: 0, expiring: 0, expired: 0 },
-      insurance: { total: 0, compliant: 0, expiring: 0, expired: 0 },
-      medical_certificate: { total: 0, compliant: 0, expiring: 0, expired: 0 },
-      cdl: { total: 0, compliant: 0, expiring: 0, expired: 0 }
-    };
-
-    // Process vehicles
-    vehicles.forEach((vehicle: VehicleRecord) => {
-      // Registration
-      if (vehicle.registrationExpiry) {
-        documentTypes.registration.total++;
-        totalDocuments++;
-        
-        const expiryDate = new Date(vehicle.registrationExpiry);
-        const daysUntilExpiry = Math.ceil((expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-        
-        if (daysUntilExpiry < 0) {
-          documentTypes.registration.expired++;
-          criticalAlerts++;
-        } else if (daysUntilExpiry <= 30) {
-          documentTypes.registration.expiring++;
-          expiringSoon++;
-          if (daysUntilExpiry <= 15) highPriorityAlerts++;
-        } else {
-          documentTypes.registration.compliant++;
-          totalCompliant++;
-        }
-      }
-      
-      // Insurance
-      if (vehicle.insuranceExpiry) {
-        documentTypes.insurance.total++;
-        totalDocuments++;
-        
-        const expiryDate = new Date(vehicle.insuranceExpiry);
-        const daysUntilExpiry = Math.ceil((expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-        
-        if (daysUntilExpiry < 0) {
-          documentTypes.insurance.expired++;
-          criticalAlerts++;
-        } else if (daysUntilExpiry <= 15) {
-          documentTypes.insurance.expiring++;
-          expiringSoon++;
-          highPriorityAlerts++;
-        } else {
-          documentTypes.insurance.compliant++;
-          totalCompliant++;
-        }
-      }
-    });
-
-    // Process drivers
-    drivers.forEach(driver => {
-      // Medical certificates
-      if (driver.medicalCertificate) {
-        documentTypes.medical_certificate.total++;
-        totalDocuments++;
-        
-        if (driver.medicalCertificate.status === 'expired') {
-          documentTypes.medical_certificate.expired++;
-          criticalAlerts++;
-        } else if (driver.medicalCertificate.status === 'expiring_soon') {
-          documentTypes.medical_certificate.expiring++;
-          expiringSoon++;
-          if (driver.medicalCertificate.daysUntilExpiry <= 30) highPriorityAlerts++;
-        } else {
-          documentTypes.medical_certificate.compliant++;
-          totalCompliant++;
-        }
-      }
-      
-      // CDL
-      if (driver.cdlInfo) {
-        documentTypes.cdl.total++;
-        totalDocuments++;
-        
-        if (driver.cdlInfo.status === 'expired') {
-          documentTypes.cdl.expired++;
-          criticalAlerts++;
-        } else if (driver.cdlInfo.status === 'expiring_soon') {
-          documentTypes.cdl.expiring++;
-          expiringSoon++;
-          if (driver.cdlInfo.daysUntilExpiry <= 60) highPriorityAlerts++;
-        } else {
-          documentTypes.cdl.compliant++;
-          totalCompliant++;
-        }
-      }
-    });
-
-    const overallComplianceRate = totalDocuments > 0 ? (totalCompliant / totalDocuments) * 100 : 100;
-    const vehicleDocuments = documentTypes.registration.total + documentTypes.insurance.total;
-    const vehicleCompliant = documentTypes.registration.compliant + documentTypes.insurance.compliant;
-    const driverDocuments = documentTypes.medical_certificate.total + documentTypes.cdl.total;
-    const driverCompliant = documentTypes.medical_certificate.compliant + documentTypes.cdl.compliant;
-
-    return {
-      overallComplianceRate: Number(overallComplianceRate.toFixed(1)),
-      vehicleComplianceRate: vehicleDocuments > 0 ? Number(((vehicleCompliant / vehicleDocuments) * 100).toFixed(1)) : 100,
-      driverComplianceRate: driverDocuments > 0 ? Number(((driverCompliant / driverDocuments) * 100).toFixed(1)) : 100,
+      overallComplianceRate: overallDocs > 0 ? Number(((compliantDocs / overallDocs) * 100).toFixed(1)) : 100,
+      vehicleComplianceRate:
+        totalVehicleDocs > 0
+          ? Number(((vehicleReport.summary.compliantCount / totalVehicleDocs) * 100).toFixed(1))
+          : 100,
+      driverComplianceRate:
+        totalDriverDocs > 0 ? Number(((driverReport.summary.compliantCount / totalDriverDocs) * 100).toFixed(1)) : 100,
       criticalAlerts,
-      highPriorityAlerts,
+      highPriorityAlerts: expirationReport.summary.criticalIssues.length,
       expiringSoon,
-      totalDocuments,
+      totalDocuments: overallDocs,
       documentTypes
     };
   }
 
-  /**
-   * Export report to PDF
-   */
   async exportToPDF(report: ComplianceReport): Promise<void> {
     try {
-      // Create PDF content
       const pdfContent = this.generatePDFContent(report);
-      
-      // Create blob and download
       const blob = new Blob([pdfContent], { type: 'text/html' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -578,20 +471,15 @@ class ComplianceReportingService {
       a.download = `${report.title.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.html`;
       a.click();
       URL.revokeObjectURL(url);
-      
       errorHandler.showSuccess('Report exported successfully!');
     } catch (error) {
       errorHandler.handleCriticalError(error, 'PDF export');
     }
   }
 
-  /**
-   * Export report to Excel/CSV
-   */
   async exportToExcel(report: ComplianceReport): Promise<void> {
     try {
       const csvContent = this.generateCSVContent(report);
-      
       const blob = new Blob([csvContent], { type: 'text/csv' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -599,16 +487,41 @@ class ComplianceReportingService {
       a.download = `${report.title.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.csv`;
       a.click();
       URL.revokeObjectURL(url);
-      
       errorHandler.showSuccess('Report exported to CSV successfully!');
     } catch (error) {
       errorHandler.handleCriticalError(error, 'Excel export');
     }
   }
 
-  /**
-   * Generate PDF content (HTML format for simplicity)
-   */
+  scheduleAutomaticReports(frequency: 'daily' | 'weekly' | 'monthly'): void {
+    const intervalMs = {
+      daily: 24 * 60 * 60 * 1000,
+      weekly: 7 * 24 * 60 * 60 * 1000,
+      monthly: 30 * 24 * 60 * 60 * 1000
+    };
+
+    const runReport = async () => {
+      try {
+        const expirationReport = await this.generateExpirationSummaryReport(30);
+        if (expirationReport.summary.criticalIssues.length > 0) {
+          errorHandler.showInfo(
+            `Scheduled Report: ${expirationReport.summary.criticalIssues.length} critical compliance issues found`,
+            10_000
+          );
+        }
+      } catch (error) {
+        console.error('Scheduled report generation failed:', error);
+      }
+    };
+
+    void runReport();
+    setInterval(() => {
+      void runReport();
+    }, intervalMs[frequency]);
+
+    errorHandler.showSuccess(`Automatic ${frequency} reports scheduled successfully!`);
+  }
+
   private generatePDFContent(report: ComplianceReport): string {
     return `
 <!DOCTYPE html>
@@ -677,9 +590,6 @@ class ComplianceReportingService {
 </html>`;
   }
 
-  /**
-   * Generate CSV content
-   */
   private generateCSVContent(report: ComplianceReport): string {
     let csv = `Report Title,${report.title}\n`;
     csv += `Generated At,${new Date(report.generatedAt).toLocaleString()}\n`;
@@ -707,33 +617,6 @@ class ComplianceReportingService {
     }
 
     return csv;
-  }
-
-  /**
-   * Schedule automatic reports
-   */
-  scheduleAutomaticReports(frequency: 'daily' | 'weekly' | 'monthly'): void {
-    const intervalMs = {
-      daily: 24 * 60 * 60 * 1000,
-      weekly: 7 * 24 * 60 * 60 * 1000,
-      monthly: 30 * 24 * 60 * 60 * 1000
-    };
-
-    setInterval(() => {
-      try {
-        const expirationReport = this.generateExpirationSummaryReport(30);
-        if (expirationReport.summary.criticalIssues.length > 0) {
-          errorHandler.showInfo(
-            `Scheduled Report: ${expirationReport.summary.criticalIssues.length} critical compliance issues found`,
-            10000
-          );
-        }
-      } catch (error) {
-        console.error('Scheduled report generation failed:', error);
-      }
-    }, intervalMs[frequency]);
-
-    errorHandler.showSuccess(`Automatic ${frequency} reports scheduled successfully!`);
   }
 }
 

@@ -80,22 +80,23 @@ export const MultiBatchDocumentUploadModal: React.FC<MultiBatchDocumentUploadMod
     setProcessingProgress(0);
 
     try {
-      // Simulate progress updates
-      const progressInterval = setInterval(() => {
-        setProcessingProgress(prev => Math.min(prev + 10, 90));
-      }, 300);
+      const result = await multiBatchDocumentProcessor.applyReconciliation();
 
-      console.log(`🚀 Starting batch processing for ${selectedFiles.length} files`);
-      
-      await multiBatchDocumentProcessor.processBatch(selectedFiles);
-      
-      clearInterval(progressInterval);
-      setProcessingProgress(100);
-      
-      setStep('reconciliation');
-      
-      console.log(`✅ Batch processing complete`);
-      
+      if (!result.success) {
+        const message = result.errors.length > 0 ? result.errors.join('; ') : 'Unknown reconciliation error';
+        setError(`Failed to apply reconciliation: ${message}`);
+        return;
+      }
+
+      console.log('[MultiBatch] Applied reconciliation', result);
+
+      onDocumentsReconciled(result.processed);
+      setStep('complete');
+
+      // Auto-close after showing success
+      setTimeout(() => {
+        handleClose();
+      }, 3000);
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Batch processing failed');
       setStep('upload');
@@ -114,17 +115,22 @@ export const MultiBatchDocumentUploadModal: React.FC<MultiBatchDocumentUploadMod
 
     try {
       const result = await multiBatchDocumentProcessor.applyReconciliation();
-      
-      console.log(`✅ Applied reconciliation: ${result.successful.length} vehicles added to fleet`);
-      
-      onDocumentsReconciled(result.successful.length);
+
+      if (!result.success) {
+        const message = result.errors.length > 0 ? result.errors.join('; ') : 'Unknown reconciliation error';
+        setError(`Failed to apply reconciliation: ${message}`);
+        return;
+      }
+
+      console.log('[MultiBatch] Applied reconciliation', result);
+
+      onDocumentsReconciled(result.processed);
       setStep('complete');
-      
+
       // Auto-close after showing success
       setTimeout(() => {
         handleClose();
       }, 3000);
-      
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to apply reconciliation');
     } finally {
@@ -542,3 +548,4 @@ export const MultiBatchDocumentUploadModal: React.FC<MultiBatchDocumentUploadMod
     </div>
   );
 };
+

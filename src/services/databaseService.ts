@@ -190,7 +190,7 @@ export class DatabaseService {
     return fetchAPI(`/vehicles/${id}`);
   }
 
-  async getVehiclesByOrganization(organizationId: string): Promise<Vehicle[]> {
+  async getVehiclesByOrganization(): Promise<Vehicle[]> {
     // Using the vehicles API endpoint
     return fetchAPI('/v1/vehicles');
   }
@@ -222,7 +222,7 @@ export class DatabaseService {
     return fetchAPI(`/drivers/${id}`);
   }
 
-  async getDriversByOrganization(organizationId: string): Promise<Driver[]> {
+  async getDriversByOrganization(): Promise<Driver[]> {
     // Driver endpoints not yet implemented - returning empty array
     console.warn('Driver API endpoints not yet implemented');
     return Promise.resolve([]);
@@ -274,7 +274,7 @@ export class DatabaseService {
     });
   }
 
-  async getActiveAlertsByOrganization(organizationId: string): Promise<ComplianceAlert[]> {
+  async getActiveAlertsByOrganization(): Promise<ComplianceAlert[]> {
     return fetchAPI('/v1/compliance/expiring');
   }
 
@@ -289,15 +289,15 @@ export class DatabaseService {
   // DASHBOARD QUERIES
   // =========================================
 
-  async getOrganizationDashboard(organizationId: string): Promise<any> {
+  async getOrganizationDashboard(): Promise<any> {
     return fetchAPI('/v1/compliance/summary');
   }
 
-  async getVehicleComplianceOverview(organizationId: string): Promise<any[]> {
+  async getVehicleComplianceOverview(): Promise<any[]> {
     return fetchAPI('/v1/vehicles');
   }
 
-  async getDriverComplianceOverview(organizationId: string): Promise<any[]> {
+  async getDriverComplianceOverview(): Promise<any[]> {
     // Driver endpoints not yet implemented - returning empty array
     console.warn('Driver compliance API endpoints not yet implemented');
     return Promise.resolve([]);
@@ -307,7 +307,7 @@ export class DatabaseService {
   // UTILITY METHODS
   // =========================================
 
-  async searchDocuments(organizationId: string, searchTerm: string): Promise<Document[]> {
+  async searchDocuments(searchTerm: string): Promise<Document[]> {
     return fetchAPI(`/v1/documents/search?q=${encodeURIComponent(searchTerm)}`);
   }
 }

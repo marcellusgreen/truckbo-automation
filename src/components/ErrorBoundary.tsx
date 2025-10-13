@@ -72,7 +72,7 @@ export class ErrorBoundary extends Component<Props, State> {
     };
 
     // Create structured error for logging
-    const appError = errorHandler.createError(
+    const appError: AppError = errorHandler.createError(
       error.message,
       'processing',
       'high',

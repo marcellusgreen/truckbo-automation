@@ -1,0 +1,3 @@
+Node: v22.17.1
+NPM: 11.4.2
+Env: VITE_REFACTOR_DEBUG=true (set for smoke runs)

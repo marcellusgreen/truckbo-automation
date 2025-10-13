@@ -2,9 +2,9 @@
 // Manages fleet data by interacting with the backend API.
 
 import { authService } from './authService';
-import { eventBus, FleetEvents } from './eventBus';
+import { FleetEvents } from './eventBus';
 import { logger, LogContext } from './logger';
-import { errorHandler, withErrorHandling } from './errorHandlingService';
+import { withErrorHandling } from './errorHandlingService';
 import { isRefactorDebugEnabled, startRefactorTimer, refactorDebugLog } from '../utils/refactorDebug';
 
 export interface VehicleRecord {

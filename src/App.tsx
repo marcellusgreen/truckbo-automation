@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { persistentFleetStorage, VehicleRecord } from './services/persistentFleetStorage';
 import { fleetDataManager } from './services/fleetDataManager';
 import { validateVIN, parseCSVFile, downloadSampleCSV } from './utils';
@@ -23,13 +23,17 @@ import { authService } from './services/authService';
 import { ExtractedVehicleData } from './services/documentProcessor';
 import { comprehensiveComplianceService } from './services/comprehensiveComplianceApi';
 import { documentDownloadService } from './services/documentDownloadService';
-import { reconcilerAPI, type VehicleSummaryView, type FleetDashboard } from './services/reconcilerAPI';
-import { mapComplianceToVehicleStatus, mapComplianceToDisplayStatus } from './utils/statusMapping';
-import { safeReconciledVehicleData, safeVehicleData } from './utils/safeDataAccess';
-import { eventBus, FleetEvents } from './services/eventBus';
+import { reconcilerAPI } from './services/reconcilerAPI';
+import { safeVehicleData } from './utils/safeDataAccess';
+import { FleetEvents } from './services/eventBus';
 import { centralizedFleetDataService, useFleetData, UnifiedVehicleData } from './services/centralizedFleetDataService';
+import { fleetStorageAdapter, type FleetVehicleInput } from './services/fleetStorageAdapter';
+import { useFleetState, type FleetStatusFilter } from './hooks/useFleetState';
+import { isFleetAdapterEnabled, isFleetHookEnabled } from './utils/featureFlags';
 
 // Types and interfaces are now imported from ./types
+
+type FleetStatusViewFilter = FleetStatusFilter | 'maintenance' | 'expires_soon' | 'review_needed';
 
 // FleetDataManager is now imported from ./services/fleetDataManager
 
@@ -96,30 +100,6 @@ const OnboardingPage: React.FC<OnboardingPageProps> = ({ setCurrentPage }) => {
       needsReview: vehicle.needsReview || false
     }));
     
-    // CRITICAL FIX: Save to persistent storage so Fleet Management tab can see the vehicles
-    const vehiclesToAdd = vehicleData.map(data => ({
-      vin: data.vin || `UNKNOWN_${Date.now()}`,
-      make: data.make || 'Unknown',
-      model: data.model || 'Unknown',
-      year: data.year || new Date().getFullYear(),
-      licensePlate: data.licensePlate || 'Unknown',
-      dotNumber: data.dotNumber,
-      truckNumber: data.truckNumber || '',
-      status: 'active' as const,
-      
-      // Registration data from document processing
-      registrationNumber: data.registrationNumber,
-      registrationState: data.registrationState,
-      registrationExpirationDate: data.registrationExpirationDate,
-      registeredOwner: data.registeredOwner,
-      
-      // Insurance data from document processing
-      insuranceCarrier: data.insuranceCarrier,
-      policyNumber: data.policyNumber,
-      insuranceExpirationDate: data.insuranceExpirationDate,
-      coverageAmount: data.coverageAmount
-    }));
-
     console.log('📄 OnboardingPage: Using centralized service to add vehicles');
     
     try {
@@ -270,10 +250,11 @@ const OnboardingPage: React.FC<OnboardingPageProps> = ({ setCurrentPage }) => {
     setStep(5); // Manual entry step
   };
 
-  const completeOnboarding = () => {
-    // Convert enhanced data to the new persistent format
+  const completeOnboarding = async () => {
+    const adapterEnabled = isFleetAdapterEnabled();
+
     const persistentVehicles = enhancedVehicleData
-      .filter(v => v.make && v.model && v.year) // Only complete vehicles
+      .filter(v => v.make && v.model && v.year)
       .map(v => ({
         vin: v.vin,
         make: v.make!,
@@ -281,30 +262,44 @@ const OnboardingPage: React.FC<OnboardingPageProps> = ({ setCurrentPage }) => {
         year: v.year!,
         licensePlate: `${v.make?.slice(0,3).toUpperCase()}${Math.floor(Math.random() * 1000)}`,
         dotNumber: undefined,
-        truckNumber: v.truckNumber || '', // Will auto-generate
+        truckNumber: v.truckNumber || '',
         status: 'active' as const
       }));
 
-    // Save to persistent storage
-    persistentFleetStorage.addVehicles(persistentVehicles);
-    
-    // Also convert to legacy format for backward compatibility
-    const legacyVehicles = enhancedVehicleData
-      .filter(v => v.make && v.model && v.year)
-      .map(v => ({
-        vin: v.vin,
-        year: v.year!,
-        make: v.make!,
-        model: v.model!,
-        fuelType: v.fuelType || 'Diesel',
-        maxWeight: v.maxWeight || 80000,
-        vehicleClass: v.vehicleClass || 'Class 8',
-        status: 'success' as const,
-        complianceTasks: 3
-      }));
+    if (persistentVehicles.length === 0) {
+      setError('No valid vehicles to add.');
+      return;
+    }
 
-    fleetDataManager.addVehicles(legacyVehicles);
-    setStep(4);
+    try {
+      const result = await fleetStorageAdapter.addVehicles(persistentVehicles as FleetVehicleInput[]);
+      if (!result.success) {
+        setError('Unable to add some vehicles. Please review and try again.');
+        return;
+      }
+
+      if (!adapterEnabled) {
+        const legacyVehicles = enhancedVehicleData
+          .filter(v => v.make && v.model && v.year)
+          .map(v => ({
+            vin: v.vin,
+            year: v.year!,
+            make: v.make!,
+            model: v.model!,
+            fuelType: v.fuelType || 'Diesel',
+            maxWeight: v.maxWeight || 80000,
+            vehicleClass: v.vehicleClass || 'Class 8',
+            status: 'success' as const,
+            complianceTasks: 3
+          }));
+
+        fleetDataManager.addVehicles(legacyVehicles);
+      }
+
+      setStep(4);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to complete onboarding');
+    }
   };
 
   const resetOnboarding = () => {
@@ -1015,9 +1010,9 @@ system.</p>
           setIsDocumentUploadOpen(false);
           console.log('🔄 Modal closed, refreshing vehicles...');
           // Use setTimeout to ensure the modal has fully closed before refreshing
-          setTimeout(() => {
+          setTimeout(async () => {
             try {
-              loadVehicles(); // Refresh vehicles after document processing
+              await centralizedFleetDataService.initializeData();
             } catch (error) {
               console.error('❌ Error refreshing vehicles:', error);
               window.location.reload(); // Fallback: reload the page
@@ -1032,159 +1027,106 @@ system.</p>
 
 // Fleet Management Component
 const FleetPage: React.FC = () => {
-  // Use centralized data service instead of multiple sources
-  const [unifiedVehicles, setUnifiedVehicles] = useState<UnifiedVehicleData[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const fleetData = useFleetData();
+  const {
+    vehicles: fleetVehicles,
+    isLoading,
+    error: fleetError,
+    refresh: refreshFleetState,
+    addVehicles: addFleetVehicles
+  } = useFleetState({ autoRefresh: true });
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'compliant' | 'non_compliant' | 'expires_soon' | 'review_needed'>('all');
+  const [statusFilter, setStatusFilter] = useState<FleetStatusViewFilter>('all');
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
-  const [showReconciledView, setShowReconciledView] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false);
   const [isDocumentUploadOpen, setIsDocumentUploadOpen] = useState(false);
   const [isMultiBatchUploadOpen, setIsMultiBatchUploadOpen] = useState(false);
   const [isTestRunnerOpen, setIsTestRunnerOpen] = useState(false);
 
-  const loadVehicles = async () => {
-    console.log('🔄 FleetPage: Loading vehicles from centralized service');
-    
-    try {
-      setIsLoading(true);
-      
-      // Single call to centralized service - no more multiple sources!
-      await fleetData.initializeData();
-      const vehicles = fleetData.getVehicles();
-      
-      setUnifiedVehicles(vehicles);
-      console.log(`✅ FleetPage: Loaded ${vehicles.length} unified vehicles`);
-      
-    } catch (error) {
-      console.error('❌ FleetPage: Error loading vehicles:', error);
-      setUnifiedVehicles([]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadVehicles();
-    
-    // Subscribe to centralized service - single subscription!
-    const unsubscribeCentralized = fleetData.subscribe((event) => {
-      console.log('🔔 FleetPage: Centralized service event:', event);
-      
-      if (event === 'data_changed') {
-        const vehicles = fleetData.getVehicles();
-        setUnifiedVehicles(vehicles);
-      } else if (event === 'loading_changed') {
-        setIsLoading(fleetData.isLoading());
-      }
-    });
-    
-    return () => {
-      unsubscribeCentralized();
-    };
-  }, []);
-
   const handleVehicleAdded = (_newVehicle: VehicleRecord) => {
-    loadVehicles(); // Reload from storage
+    void refreshFleetState();
   };
 
   const handleVehiclesAdded = (_newVehicles: VehicleRecord[]) => {
-    loadVehicles(); // Reload from storage
+    void refreshFleetState();
   };
 
-  const handleDocumentsProcessed = (extractedData: ExtractedVehicleData[]) => {
-    console.log('📄 Processing extracted document data:', extractedData);
-    
-    // **LOW PRIORITY FIX: Use safe data access for extracted data**
+  const handleDocumentsProcessed = async (extractedData: ExtractedVehicleData[]) => {
+    console.log('dY", Processing extracted document data:', extractedData);
+
     const vehiclesToAdd = extractedData.map(data => safeVehicleData(data));
 
-    console.log('📄 Converting to vehicle records:', vehiclesToAdd);
+    console.log('dY", Converting to vehicle records:', vehiclesToAdd);
 
-    const result = persistentFleetStorage.addVehicles(vehiclesToAdd);
-    console.log(`📄 Storage result: ${result.successful.length} successful, ${result.failed.length} failed`);
-    
-    // **HIGH PRIORITY FIX: Comprehensive data refresh with event bus sync**
-    if (result.successful.length > 0) {
-      console.log('📄 Successfully added vehicles, starting comprehensive refresh...');
-      
-      // Immediately emit event for document processing
-      FleetEvents.documentProcessed({
-        processedVehicles: extractedData.length,
-        successfulVehicles: result.successful.length,
-        failedVehicles: result.failed.length,
-        source: 'fleet_document_upload'
-      }, undefined, 'fleetPage');
-      
-      // Also try to sync with reconcilerAPI for complete integration
-      Promise.all(
-        extractedData.map(async (vehicleData) => {
-          if (vehicleData.vin) {
-            try {
-              await reconcilerAPI.addDocument(vehicleData, {
-                fileName: `fleet_upload_${vehicleData.vin}_${Date.now()}`,
-                source: 'fleet_document_upload',
-                uploadDate: new Date().toISOString()
-              });
-            } catch (error) {
-              console.warn(`⚠️ Could not sync VIN ${vehicleData.vin} with reconcilerAPI:`, error);
+    try {
+      const result = await addFleetVehicles(vehiclesToAdd as FleetVehicleInput[]);
+      console.log('dY", Storage result summary:', result);
+
+      if (result.success && result.processed > 0) {
+        console.log('dY", Successfully added vehicles, starting comprehensive refresh...');
+
+        FleetEvents.documentProcessed({
+          processedVehicles: extractedData.length,
+          successfulVehicles: result.processed,
+          failedVehicles: result.failed,
+          source: 'fleet_document_upload'
+        }, undefined, 'fleetPage');
+
+        await Promise.all(
+          extractedData.map(async (vehicleData) => {
+            if (vehicleData.vin) {
+              try {
+                await reconcilerAPI.addDocument(vehicleData, {
+                  fileName: `fleet_upload_${vehicleData.vin}_${Date.now()}`,
+                  source: 'fleet_document_upload',
+                  uploadDate: new Date().toISOString()
+                });
+              } catch (error) {
+                console.warn(`?s??,? Could not sync VIN ${vehicleData.vin} with reconcilerAPI:`, error);
+              }
             }
-          }
-        })
-      ).then(() => {
-        console.log('✅ ReconcilerAPI sync completed');
-      }).catch(error => {
-        console.warn('⚠️ Some reconcilerAPI syncs failed:', error);
-      });
-      
-      setTimeout(() => {
+          })
+        );
+        console.log('?o. ReconcilerAPI sync completed');
+
         try {
-          console.log('🔄 Clearing reconcilerAPI cache...');
+          console.log('dY", Clearing reconcilerAPI cache...');
           reconcilerAPI.clearCache();
-          
-          console.log('🔄 Reloading all vehicle data...');
-          loadVehicles(); // Reload to show new vehicles
-          
-          console.log('✅ Comprehensive data refresh completed!');
+          await refreshFleetState();
+          console.log('?o. Comprehensive data refresh completed!');
         } catch (error) {
-          console.error('❌ Error during data refresh:', error);
-          // Fallback: reload the page
+          console.error('??O Error during data refresh:', error);
           window.location.reload();
         }
-      }, 500);
-      
-    } else {
-      console.error('📄 No vehicles were successfully added:', result.failed);
+      } else {
+        console.error('dY", No vehicles were successfully added:', result.errors);
+      }
+    } catch (error) {
+      console.error('??O Error while adding vehicles from documents:', error);
     }
   };
 
-  const handleMultiBatchDocumentsReconciled = (vehicleCount: number) => {
-    console.log(`📄 Multi-batch reconciliation complete: ${vehicleCount} vehicles added`);
-    
-    // **HIGH PRIORITY FIX: Comprehensive refresh for batch processing too**
-    setTimeout(() => {
-      try {
-        console.log('🔄 Clearing reconcilerAPI cache after batch processing...');
-        reconcilerAPI.clearCache();
-        
-        console.log('🔄 Reloading all vehicle data after batch processing...');
-        loadVehicles(); // Reload to show reconciled vehicles
-        
-        // Force re-render
-        setSearchTerm(prev => prev);
-        
-        console.log('✅ Batch processing refresh completed!');
-      } catch (error) {
-        console.error('❌ Error during batch processing refresh:', error);
-        window.location.reload();
-      }
-    }, 500);
+  const handleMultiBatchDocumentsReconciled = async (vehicleCount: number) => {
+    console.log(`dY", Multi-batch reconciliation complete: ${vehicleCount} vehicles added`);
+
+    try {
+      console.log('dY", Clearing reconcilerAPI cache after batch processing...');
+      reconcilerAPI.clearCache();
+
+      console.log('dY", Reloading all vehicle data after batch processing...');
+      await refreshFleetState();
+
+      setSearchTerm(prev => prev);
+
+      console.log('?o. Batch processing refresh completed!');
+    } catch (error) {
+      console.error('??O Error during batch processing refresh:', error);
+      window.location.reload();
+    }
   };
 
   // Function to fetch real compliance data for a vehicle (PRODUCTION MODE)
-  const fetchRealComplianceData = async (vehicle: VehicleRecord) => {
+  const fetchRealComplianceData = async (vehicle: UnifiedVehicleData) => {
     try {
       console.log(`🔄 Fetching real compliance data for VIN: ${vehicle.vin}, DOT: ${vehicle.dotNumber}`);
       
@@ -1243,7 +1185,7 @@ const FleetPage: React.FC = () => {
       });
       
       // Reload vehicles to show updated data
-      loadVehicles();
+      await refreshFleetState();
       
       return complianceData;
     } catch (error) {
@@ -1343,7 +1285,7 @@ const FleetPage: React.FC = () => {
   };
 
   // Get compliance data - real API data, extracted document data, or show blanks
-  const getComplianceData = (vehicle: VehicleRecord) => {
+  const getComplianceData = (vehicle: UnifiedVehicleData) => {
     // Debug: Log the vehicle data to see what's stored
     console.log(`🔍 Getting compliance data for vehicle ${vehicle.truckNumber || vehicle.vin}:`, {
       id: vehicle.id,
@@ -1469,70 +1411,8 @@ const FleetPage: React.FC = () => {
     };
   };
 
-  // Map reconciled vehicle to card format
-  const mapReconciledVehicleToCardFormat = (reconciledVehicle: VehicleSummaryView) => {
-    // **LOW PRIORITY FIX: Use safe data access**
-    const safeVehicle = safeReconciledVehicleData(reconciledVehicle);
-    
-    return {
-      vehicle: {
-        id: `reconciled-${safeVehicle.vin}`,
-        vin: safeVehicle.vin,
-        make: safeVehicle.make,
-        model: safeVehicle.model,
-        year: safeVehicle.year,
-        licensePlate: safeVehicle.licensePlate,
-        truckNumber: `#${safeVehicle.vin.slice(-4)}`, // Use last 4 of VIN as truck number
-        status: mapComplianceToVehicleStatus(safeVehicle.overallStatus),
-        location: safeVehicle.state,
-        mileage: null,
-        fuelLevel: null,
-        nextService: null,
-        dataSource: 'reconciled' as const,
-        lastUpdated: safeVehicle.lastUpdated,
-        engineDescription: safeVehicle.engineDescription
-      },
-      compliance: {
-        overallStatus: mapComplianceToDisplayStatus(safeVehicle.overallStatus),
-        complianceScore: safeVehicle.complianceScore,
-        registration: { 
-          status: reconciledVehicle.nextExpiringDocument?.documentType === 'registration' ? 
-                  (reconciledVehicle.nextExpiringDocument.urgency === 'expired' ? 'expired' as const : 
-                   reconciledVehicle.nextExpiringDocument.urgency === 'critical' ? 'warning' as const : 'active' as const) : 
-                  'active' as const,
-          daysUntilExpiry: reconciledVehicle.nextExpiringDocument?.documentType === 'registration' ? 
-                          reconciledVehicle.nextExpiringDocument.daysUntilExpiry : null,
-          expiryDate: reconciledVehicle.nextExpiringDocument?.documentType === 'registration' ? 
-                     reconciledVehicle.nextExpiringDocument.expirationDate : null,
-          renewalCost: null
-        },
-        insurance: { 
-          status: reconciledVehicle.nextExpiringDocument?.documentType === 'insurance' ? 
-                  (reconciledVehicle.nextExpiringDocument.urgency === 'expired' ? 'expired' as const : 
-                   reconciledVehicle.nextExpiringDocument.urgency === 'critical' ? 'warning' as const : 'active' as const) : 
-                  'active' as const,
-          daysUntilExpiry: reconciledVehicle.nextExpiringDocument?.documentType === 'insurance' ? 
-                          reconciledVehicle.nextExpiringDocument.daysUntilExpiry : null,
-          carrier: '—',
-          policyNumber: '—',
-          isActive: null,
-          coverageAmount: null
-        },
-        ifta: { 
-          status: 'active' as const, 
-          daysUntilExpiry: null,
-          quarterDue: '—',
-          jurisdiction: '—'
-        },
-        isRealData: true,
-        dataSource: 'reconciled',
-        lastUpdated: reconciledVehicle.lastUpdated
-      }
-    };
-  };
-
   // Use centralized service for filtering - much simpler and consistent!
-  const allFilteredVehicles = unifiedVehicles.filter(vehicle => {
+  const allFilteredVehicles = fleetVehicles.filter(vehicle => {
     // Apply search filter
     const lowerSearchTerm = searchTerm.toLowerCase();
     const matchesSearch = searchTerm === '' ||
@@ -1571,54 +1451,82 @@ const FleetPage: React.FC = () => {
   });
   
   console.log('🚗 Unified Vehicle display debug:', {
-    unifiedVehicles: unifiedVehicles.length,
+    fleetVehicles: fleetVehicles.length,
     filteredVehicles: allFilteredVehicles.length,
     dataSourceBreakdown: {
-      persistent: unifiedVehicles.filter(v => v.dataSource === 'persistent').length,
-      reconciled: unifiedVehicles.filter(v => v.dataSource === 'reconciled').length,
-      merged: unifiedVehicles.filter(v => v.dataSource === 'merged').length
+      persistent: fleetVehicles.filter(v => v.dataSource === 'persistent').length,
+      reconciled: fleetVehicles.filter(v => v.dataSource === 'reconciled').length,
+      merged: fleetVehicles.filter(v => v.dataSource === 'merged').length
     }
   });
 
   // Use centralized service for consistent stats
-  const fleetStats = fleetData.getFleetStats();
   const stats = {
-    total: unifiedVehicles.length,
-    active: unifiedVehicles.filter(v => v.status === 'active').length,
-    inactive: unifiedVehicles.filter(v => v.status === 'inactive').length,
-    complianceWarnings: unifiedVehicles.filter(v => (v.complianceScore || 0) < 80 && (v.complianceScore || 0) >= 60).length,
-    complianceExpired: unifiedVehicles.filter(v => (v.complianceScore || 0) < 60).length
+    total: fleetVehicles.length,
+    active: fleetVehicles.filter(v => v.status === 'active').length,
+    inactive: fleetVehicles.filter(v => v.status === 'inactive').length,
+    complianceWarnings: fleetVehicles.filter(v => (v.complianceScore || 0) < 80 && (v.complianceScore || 0) >= 60).length,
+    complianceExpired: fleetVehicles.filter(v => (v.complianceScore || 0) < 60).length
   };
 
   console.log('📊 Dashboard stats calculation:', {
-    unifiedVehicles: unifiedVehicles.length,
-    reconciledCount: unifiedVehicles.filter(v => v.dataSource === 'reconciled').length,
+    fleetVehicles: fleetVehicles.length,
+    reconciledCount: fleetVehicles.filter(v => v.dataSource === 'reconciled').length,
     calculatedTotal: stats.total,
     statsObject: stats
   });
 
   // Convert vehicle data to enhanced card format
-  const mapVehicleToCardFormat = (vehicle: VehicleRecord) => {
+  const mapVehicleToCardFormat = (vehicle: UnifiedVehicleData) => {
     const compliance = getComplianceData(vehicle);
-    
-    // Calculate overall compliance score based on status
-    const complianceItems = [
-      compliance.registration,
-      compliance.insurance,
-      compliance.dotInspection,
-      compliance.ifta
-    ];
-    
-    const compliantCount = complianceItems.filter(item => item.status === 'compliant').length;
-    const warningCount = complianceItems.filter(item => item.status === 'warning').length;
-    const expiredCount = complianceItems.filter(item => item.status === 'expired').length;
-    
-    // Calculate score: compliant = 100%, warning = 70%, expired = 0%
-    const totalScore = (compliantCount * 100 + warningCount * 70 + expiredCount * 0) / complianceItems.length;
-    
-    const overallStatus: 'compliant' | 'warning' | 'expired' = 
-      totalScore >= 90 ? 'compliant' : 
-      totalScore >= 50 ? 'warning' : 'expired';
+
+    const normalizeStatus = (status: unknown): 'compliant' | 'warning' | 'expired' => {
+      if (status === 'expired' || status === 'critical') {
+        return 'expired';
+      }
+      if (status === 'warning') {
+        return 'warning';
+      }
+      return 'compliant';
+    };
+
+    const toComplianceItem = (item: any) => {
+      const expiry =
+        item?.expiryDate ??
+        item?.expirationDate ??
+        item?.registrationExpirationDate ??
+        item?.insuranceExpirationDate ??
+        null;
+
+      return {
+        status: normalizeStatus(item?.status),
+        expiryDate: expiry ?? undefined,
+        daysUntilExpiry: typeof item?.daysUntilExpiry === 'number' ? item.daysUntilExpiry : 0
+      };
+    };
+
+    const registrationItem = toComplianceItem(compliance.registration ?? {});
+    const insuranceItem = toComplianceItem(compliance.insurance ?? {});
+    const dotInspectionItem = toComplianceItem(compliance.dotInspection ?? {});
+    const iftaItem = toComplianceItem(compliance.ifta ?? {});
+
+    const complianceItems = [registrationItem, insuranceItem, dotInspectionItem, iftaItem];
+
+    const compliantCount = complianceItems.filter((item) => item.status === 'compliant').length;
+    const warningCount = complianceItems.filter((item) => item.status === 'warning').length;
+
+    const totalScore =
+      complianceItems.length > 0
+        ? (compliantCount * 100 + warningCount * 70) / complianceItems.length
+        : 0;
+
+    const overallStatus: 'compliant' | 'warning' | 'expired' =
+      totalScore >= 90 ? 'compliant' : totalScore >= 50 ? 'warning' : 'expired';
+
+    const parsedYear =
+      typeof vehicle.year === 'number'
+        ? vehicle.year
+        : Number(vehicle.year) || new Date().getFullYear();
 
     return {
       vehicle: {
@@ -1626,18 +1534,18 @@ const FleetPage: React.FC = () => {
         vin: vehicle.vin,
         make: vehicle.make,
         model: vehicle.model,
-        year: vehicle.year,
-        licensePlate: vehicle.licensePlate,
+        year: parsedYear,
+        licensePlate: vehicle.licensePlate || 'UNKNOWN',
         truckNumber: vehicle.truckNumber,
-        status: vehicle.status,
+        status: (vehicle.status ?? 'active') as 'active' | 'inactive' | 'maintenance',
         dotNumber: vehicle.dotNumber,
-        dateAdded: vehicle.dateAdded
+        dateAdded: vehicle.dateAdded ?? new Date().toISOString()
       },
       compliance: {
-        registration: compliance.registration,
-        insurance: compliance.insurance,
-        dotInspection: compliance.dotInspection,
-        ifta: compliance.ifta,
+        registration: registrationItem,
+        insurance: insuranceItem,
+        dotInspection: dotInspectionItem,
+        ifta: iftaItem,
         overall: {
           score: Math.round(totalScore),
           status: overallStatus
@@ -1682,8 +1590,20 @@ const FleetPage: React.FC = () => {
             <div className="text-3xl font-bold">{stats.total}</div>
             <div className="text-slate-300">Total Trucks</div>
           </div>
-        </div>
       </div>
+    </div>
+
+      {fleetError && (
+        <div className="mb-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {fleetError}
+        </div>
+      )}
+
+      {isLoading && (
+        <div className="mb-4 rounded border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
+          Loading fleet data…
+        </div>
+      )}
 
       {/* Fleet Stats - Minimalistic */}
       <div className="flex items-center gap-4 mb-4 text-sm">
@@ -1789,7 +1709,7 @@ const FleetPage: React.FC = () => {
           {/* Additional Actions */}
           <div className="flex items-center gap-2 mb-4">
             <button 
-              onClick={() => documentDownloadService.downloadComplianceSummary(unifiedVehicles)}
+              onClick={() => documentDownloadService.downloadComplianceSummary(fleetVehicles)}
               className="px-3 py-1.5 text-sm bg-gray-500 hover:bg-gray-600 text-white rounded transition-colors"
               title="Download fleet compliance report"
             >
@@ -1798,7 +1718,7 @@ const FleetPage: React.FC = () => {
             <button 
               onClick={async () => {
                 console.log('🔄 Starting bulk compliance sync...');
-                for (const unifiedVehicle of unifiedVehicles) {
+                for (const unifiedVehicle of fleetVehicles) {
                   await fetchRealComplianceData(unifiedVehicle);
                   await new Promise(resolve => setTimeout(resolve, 500));
                 }
@@ -1839,7 +1759,7 @@ const FleetPage: React.FC = () => {
                   } catch (error) {
                     console.error('❌ Error clearing fleet data:', error);
                     // Still try to reload in case of partial success
-                    loadVehicles();
+                    void refreshFleetState();
                   }
                 }
               }}
@@ -1854,16 +1774,12 @@ const FleetPage: React.FC = () => {
       {/* Vehicle Display - Cards or Table */}
       {viewMode === 'cards' ? (
         <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
-          {allFilteredVehicles.map((vehicle, index) => {
-            // Check if this is a reconciled vehicle or regular vehicle
-            const isReconciledVehicle = 'overallStatus' in vehicle;
-            const cardData = isReconciledVehicle 
-              ? mapReconciledVehicleToCardFormat(vehicle as VehicleSummaryView)
-              : mapVehicleToCardFormat(vehicle as VehicleRecord);
-            
+          {allFilteredVehicles.map((vehicle) => {
+            const cardData = mapVehicleToCardFormat(vehicle);
+
             return (
               <MinimalisticVehicleCard
-                key={isReconciledVehicle ? `reconciled-${vehicle.vin}` : (vehicle as VehicleRecord).id}
+                key={vehicle.id}
                 vehicle={cardData.vehicle}
                 compliance={cardData.compliance}
                 onViewDetails={() => {
@@ -1897,8 +1813,7 @@ const FleetPage: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {allFilteredVehicles.map((vehicle, index) => {
-                const isReconciledVehicle = 'overallStatus' in vehicle;
+              {allFilteredVehicles.map((vehicle) => {
                 const compliance = getComplianceData(vehicle);
                 return (
                 <tr key={vehicle.id} className="border-b border-gray-100 hover:bg-gray-50">
@@ -1989,9 +1904,9 @@ const FleetPage: React.FC = () => {
           setIsDocumentUploadOpen(false);
           console.log('🔄 Modal closed, refreshing vehicles...');
           // Use setTimeout to ensure the modal has fully closed before refreshing
-          setTimeout(() => {
+          setTimeout(async () => {
             try {
-              loadVehicles(); // Refresh vehicles after document processing
+              await centralizedFleetDataService.initializeData();
             } catch (error) {
               console.error('❌ Error refreshing vehicles:', error);
               window.location.reload(); // Fallback: reload the page
@@ -2365,10 +2280,17 @@ focus:border-blue-500"
 const DashboardPage: React.FC<DashboardPageProps> = ({ setCurrentPage }) => {
   // Use centralized service for consistent dashboard data
   const dashboardFleetData = useFleetData();
+  const fleetHookEnabled = isFleetHookEnabled();
+  const { stats: hookFleetStats } = useFleetState({ autoRefresh: true });
   const [fleetStats, setFleetStats] = useState(() => dashboardFleetData.getFleetStats());
   const [complianceStats, setComplianceStats] = useState(fleetDataManager.getComplianceStats());
 
   const updateStats = () => {
+    if (fleetHookEnabled) {
+      setComplianceStats(fleetDataManager.getComplianceStats());
+      return;
+    }
+
     // Get stats from centralized service - single source of truth!
     const centralizedStats = dashboardFleetData.getFleetStats();
     const legacyComplianceStats = fleetDataManager.getComplianceStats();
@@ -2378,25 +2300,37 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ setCurrentPage }) => {
   };
 
   useEffect(() => {
-    // Subscribe to centralized service for dashboard updates
-    const unsubscribeCentralized = dashboardFleetData.subscribe((event) => {
-      console.log('📊 Dashboard: Centralized service event:', event);
+    if (fleetHookEnabled) {
+      updateStats();
+      return;
+    }
+
+    const unsubscribeCentralized = dashboardFleetData.subscribe((event: 'data_changed' | 'loading_changed' | 'error') => {
+      console.log('dY"S Dashboard: Centralized service event:', event);
       if (event === 'data_changed') {
         updateStats();
       }
     });
-    
+
     const unsubscribeFleet = fleetDataManager.subscribe(updateStats);
-    
+
     // Initial stats load
     updateStats();
-    
+
     return () => {
       unsubscribeCentralized();
       unsubscribeFleet();
     };
-  }, []);
+  }, [dashboardFleetData, fleetHookEnabled]);
 
+  useEffect(() => {
+    if (!fleetHookEnabled) {
+      return;
+    }
+    setFleetStats(hookFleetStats);
+  }, [fleetHookEnabled, hookFleetStats]);
+
+  const displayedFleetStats = fleetHookEnabled ? hookFleetStats : fleetStats;
 
   return (
     <div className="space-y-8">
@@ -2417,11 +2351,11 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ setCurrentPage }) => {
         {/* Simplified Stats */}
         <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="bg-gray-50 rounded-lg p-4">
-            <div className="text-2xl font-bold text-gray-900">{fleetStats.total}</div>
+            <div className="text-2xl font-bold text-gray-900">{displayedFleetStats.total}</div>
             <div className="text-sm text-gray-600">Total Vehicles</div>
           </div>
           <div className="bg-green-50 rounded-lg p-4">
-            <div className="text-2xl font-bold text-green-700">{fleetStats.active}</div>
+            <div className="text-2xl font-bold text-green-700">{displayedFleetStats.active}</div>
             <div className="text-sm text-gray-600">Active</div>
           </div>
           <div className="bg-amber-50 rounded-lg p-4">
@@ -2519,7 +2453,6 @@ strokeDasharray="0 220"
 // Main App Component
 function AppContent() {
   const [currentPage, setCurrentPage] = useState('dashboard');
-  const [storageInitialized, setStorageInitialized] = useState(false);
 
   // Initialize storage system with PostgreSQL migration on app startup
   useEffect(() => {
@@ -2527,12 +2460,10 @@ function AppContent() {
       try {
         console.log('🔄 Initializing storage system with PostgreSQL migration...');
         await persistentFleetStorage.initialize();
-        setStorageInitialized(true);
         console.log('✅ Storage system initialized successfully');
       } catch (error) {
         console.warn('⚠️ Storage initialization failed, using fallback mode:', error);
         // Still allow the app to continue with localStorage fallback
-        setStorageInitialized(true);
       }
     };
 
@@ -2763,3 +2694,16 @@ function App() {
 }
 
 export default App;
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -62,7 +62,10 @@ export class DocumentProcessor {
       }
     }
 
-    const asyncJobs = initialResults.filter(r => r.success && r.jobId);
+    const asyncJobs = initialResults.filter(
+      (result): result is GoogleVisionProcessingResult & { fileName: string; jobId: string; statusUrl: string } =>
+        Boolean(result.success && result.jobId && result.statusUrl)
+    );
     const uploadErrors = initialResults.filter(r => !r.success);
 
     logLifecycle('jobs:queued', {
@@ -94,7 +97,11 @@ export class DocumentProcessor {
 
     try {
       const completedResults = await documentStatusPoller.pollMultipleJobs(
-        asyncJobs,
+        asyncJobs.map(job => ({
+          jobId: job.jobId,
+          statusUrl: job.statusUrl,
+          fileName: job.fileName
+        })),
         (jobId, result) => {
           completedCount++;
           const job = asyncJobs.find(j => j.jobId === jobId);

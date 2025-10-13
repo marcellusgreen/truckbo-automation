@@ -225,9 +225,10 @@ const ErrorBoundaryTestComponent: React.FC = () => {
   const [networkShouldFail, setNetworkShouldFail] = useState(false);
 
   const triggerError = (type: string) => {
-    logger.info('Triggering test error', { 
+    logger.info('Triggering test error', {
       component: 'ErrorBoundaryTestComponent',
-      errorType: type
+      operation: 'trigger_error',
+      metadata: { errorType: type }
     });
     setErrorType(type);
   };

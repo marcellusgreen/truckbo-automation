@@ -104,7 +104,7 @@ export function NotificationSystem() {
       {notifications.length > 5 && (
         <div className="text-center">
           <button
-            onClick={() => errorHandler.clearAll()}
+            onClick={() => errorHandler.clearAllNotifications()}
             className="text-xs text-gray-500 hover:text-gray-700 underline"
           >
             Clear all ({notifications.length} total)

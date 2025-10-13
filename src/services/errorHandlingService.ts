@@ -94,7 +94,7 @@ export class ErrorHandlerService {
     error.severity = severity;
     error.context = options.context;
     error.originalError = options.originalError;
-    error.userMessage = options.userMessage || this.getUserFriendlyMessage(category, message);
+    error.userMessage = options.userMessage || this.getUserFriendlyMessage(category);
     error.suggestions = options.suggestions || this.getErrorSuggestions(category);
     error.retryable = options.retryable ?? this.isRetryableError(category);
     error.metadata = options.metadata;
@@ -256,8 +256,9 @@ export class ErrorHandlerService {
         } catch (error) {
           lastError = this.normalizeError(error as Error, context);
           
-          logger.warn(`Operation failed on attempt ${attempt}`, context, lastError, {
-            attemptsRemaining: maxRetries - attempt
+          logger.warn(`Operation failed on attempt ${attempt}`, context, {
+            attemptsRemaining: maxRetries - attempt,
+            lastError
           });
 
           if (attempt < maxRetries && lastError.retryable) {
@@ -375,7 +376,7 @@ export class ErrorHandlerService {
   /**
    * Generate user-friendly error messages
    */
-  private getUserFriendlyMessage(category: ErrorCategory, techMessage: string): string {
+  private getUserFriendlyMessage(category: ErrorCategory): string {
     const messages: Record<ErrorCategory, string> = {
       validation: 'Please check your input and try again.',
       network: 'Unable to connect to the server. Please check your internet connection.',
@@ -443,7 +444,7 @@ export class ErrorHandlerService {
       logger.warn(`Frequent error detected: ${key}`, {
         component: 'ErrorHandlerService',
         operation: 'track_error'
-      }, undefined, {
+      }, {
         errorType: key,
         occurrences: count + 1
       });

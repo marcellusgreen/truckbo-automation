@@ -22,19 +22,19 @@ export function DriverManagementPage() {
 
   // Load drivers on component mount
   useEffect(() => {
-    loadDrivers();
-    
-    // Subscribe to driver data changes
+    void loadDrivers();
+
     const unsubscribe = persistentFleetStorage.subscribe(() => {
-      loadDrivers();
+      void loadDrivers();
     });
-    
+
     return unsubscribe;
   }, []);
 
-  const loadDrivers = () => {
+  const loadDrivers = async () => {
+    setLoading(true);
     try {
-      const driverData = persistentFleetStorage.getDrivers();
+      const driverData = await persistentFleetStorage.getDriversAsync();
       setDrivers(driverData);
       
       // Generate alerts
@@ -457,3 +457,4 @@ export function DriverManagementPage() {
     </div>
   );
 }
+

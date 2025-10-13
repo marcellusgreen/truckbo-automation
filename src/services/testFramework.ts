@@ -46,6 +46,7 @@ export interface TestSuite {
 class TestFramework {
   private testSuites: Map<string, TestSuite> = new Map();
   private isRunning = false;
+  private readonly silentProgress = (_progress: number, _message: string): void => undefined;
 
   // Create test documents with known data for validation
   async generateTestDocument(type: 'registration' | 'insurance', vehicleData: {
@@ -163,7 +164,7 @@ TRUCK NUMBER: ${vehicleData.truckNumber}
 
       try {
         const fileList = this.createFileList([file]);
-        const processingResult = await documentProcessor.processBulkDocuments(fileList);
+        const processingResult = await documentProcessor.processDocuments(fileList, this.silentProgress);
         const executionTime = Date.now() - startTime;
 
         if (processingResult.vehicleData.length === 0) {
@@ -383,7 +384,7 @@ TRUCK NUMBER: ${vehicleData.truckNumber}
       console.log('📁 Testing empty file handling...');
       const emptyFile = new File([''], 'empty.txt', { type: 'text/plain' });
       const fileList = this.createFileList([emptyFile]);
-      const result = await documentProcessor.processBulkDocuments(fileList);
+      const result = await documentProcessor.processDocuments(fileList, this.silentProgress);
       
       const passed = result.errors.length > 0 || result.unprocessedFiles.length > 0 || result.vehicleData.length === 0;
       
@@ -418,7 +419,7 @@ TRUCK NUMBER: ${vehicleData.truckNumber}
       const noDataContent = 'This is just random text with no vehicle information at all. Lorem ipsum dolor sit amet.';
       const noDataFile = new File([noDataContent], 'no_data.txt', { type: 'text/plain' });
       const fileList = this.createFileList([noDataFile]);
-      const result = await documentProcessor.processBulkDocuments(fileList);
+      const result = await documentProcessor.processDocuments(fileList, this.silentProgress);
       
       // Should either extract no data or flag for review
       const passed = result.vehicleData.length === 0 || 
@@ -464,7 +465,7 @@ REGISTRATION EXPIRES: 12/31/2024
       `;
       const malformedVinFile = new File([malformedVinContent], 'malformed_vin.txt', { type: 'text/plain' });
       const fileList = this.createFileList([malformedVinFile]);
-      const result = await documentProcessor.processBulkDocuments(fileList);
+      const result = await documentProcessor.processDocuments(fileList, this.silentProgress);
       
       // Should either not extract VIN or flag for review
       const passed = (result.vehicleData.length === 0) || 
@@ -504,7 +505,7 @@ REGISTRATION EXPIRES: 12/31/2024
       const invalidVinContent = 'VEHICLE REGISTRATION\nINVALID VIN: THISISNOTAVALIDVIN\nMAKE: CHEVROLET\nMODEL: SILVERADO';
       const invalidVinFile = new File([invalidVinContent], 'invalid_vin.txt', { type: 'text/plain' });
       const fileList = this.createFileList([invalidVinFile]);
-      const result = await documentProcessor.processBulkDocuments(fileList);
+      const result = await documentProcessor.processDocuments(fileList, this.silentProgress);
       
       const passed = result.vehicleData.length === 0 || 
                     (result.vehicleData.length > 0 && 
@@ -540,7 +541,7 @@ REGISTRATION EXPIRES: 12/31/2024
       const unsupportedContent = 'VIN: 1HGBH41JXMN109186\nMAKE: HONDA\nMODEL: CIVIC';
       const unsupportedFile = new File([unsupportedContent], 'test.xyz', { type: 'application/unknown' });
       const fileList = this.createFileList([unsupportedFile]);
-      const result = await documentProcessor.processBulkDocuments(fileList);
+      const result = await documentProcessor.processDocuments(fileList, this.silentProgress);
       
       // Should skip unsupported files
       const passed = result.vehicleData.length === 0 && 
@@ -596,7 +597,7 @@ EXPIRATION DATE: 06/30/2025
       const goodFile2 = new File([anotherGoodContent], 'good2.txt', { type: 'text/plain' });
       
       const fileList = this.createFileList([goodFile1, badFile, goodFile2]);
-      const result = await documentProcessor.processBulkDocuments(fileList);
+      const result = await documentProcessor.processDocuments(fileList, this.silentProgress);
       
       // Should process good files despite bad ones
       const passed = result.vehicleData.length >= 2 && // Should get at least 2 good records
@@ -702,7 +703,7 @@ MODEL: F150
         `;
         const file = new File([content], `date_test_${dateTest.format}.txt`, { type: 'text/plain' });
         const fileList = this.createFileList([file]);
-        const result = await documentProcessor.processBulkDocuments(fileList);
+        const result = await documentProcessor.processDocuments(fileList, this.silentProgress);
 
         const passed = result.vehicleData.length > 0 && 
                       result.vehicleData[0].registrationExpiry !== undefined;
@@ -745,7 +746,7 @@ MODEL: F150
         `;
         const file = new File([content], `vin_test_${i}.txt`, { type: 'text/plain' });
         const fileList = this.createFileList([file]);
-        const result = await documentProcessor.processBulkDocuments(fileList);
+        const result = await documentProcessor.processDocuments(fileList, this.silentProgress);
 
         const passed = result.vehicleData.length > 0 && 
                       result.vehicleData[0].vin === '1HGBH41JXMN109186';

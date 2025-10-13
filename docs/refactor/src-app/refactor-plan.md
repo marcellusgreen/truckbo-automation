@@ -68,3 +68,4 @@
 - Maintain this plan (`docs/refactor/src-app/refactor-plan.md`) as the source of truth; update per phase completion.
 - Log phase artifacts in sibling markdown files (e.g., `dependency-map.md`, `adapter-status.md`) inside `docs/refactor/src-app/`.
 - Cross-link relevant data flow docs to keep centralized service and document ingestion narratives consistent.
+

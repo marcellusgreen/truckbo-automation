@@ -352,15 +352,7 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
                     <div className="text-sm text-blue-700">Successfully Processed</div>
                   </div>
                   <div className="text-center">
-                    <div className="text-2xl font-bold text-emerald-600">{(() => {
-                      const count = (processingResult.consolidatedVehicles?.length || processingResult.vehicleData.length);
-                      console.log('🔍 SUMMARY COUNT DEBUG:', {
-                        consolidatedVehicles: processingResult.consolidatedVehicles?.length,
-                        vehicleData: processingResult.vehicleData.length,
-                        finalCount: count
-                      });
-                      return count;
-                    })()}</div>
+                    <div className="text-2xl font-bold text-emerald-600">{processingResult.vehicleData.length}</div>
                     <div className="text-sm text-emerald-700">Vehicles Found</div>
                   </div>
                   <div className="text-center">
@@ -412,7 +404,7 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
                             <div>
                               <span className="text-gray-500">Expiry Date:</span>
                               <div className="font-bold">
-                                {vehicle.registrationExpiry || vehicle.insuranceExpiry || '—'}
+                                {vehicle.registrationExpirationDate || vehicle.insuranceExpirationDate || '—'}
                               </div>
                             </div>
                           </div>
@@ -468,15 +460,7 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
                   onClick={acceptResults}
                   className="flex-2 px-8 py-3 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white rounded-xl font-bold transition-all duration-200 hover:scale-105 active:scale-95"
                 >
-                  ✅ Add {(() => {
-                    const count = (processingResult.consolidatedVehicles?.length || processingResult.vehicleData.length);
-                    console.log('🔍 BUTTON COUNT DEBUG:', {
-                      consolidatedVehicles: processingResult.consolidatedVehicles?.length,
-                      vehicleData: processingResult.vehicleData.length,
-                      finalCount: count
-                    });
-                    return count;
-                  })()} Vehicles to Fleet
+                  Add {processingResult.vehicleData.length} Vehicles to Fleet
                 </button>
               </div>
             </div>

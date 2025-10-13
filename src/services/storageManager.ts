@@ -1,19 +1,18 @@
 // Storage Manager - Bridge between localStorage and PostgreSQL
 // Provides seamless migration path from demo to production storage
 
-import { DatabaseService, Vehicle, Driver, Document, ComplianceAlert } from './databaseService';
+import { DatabaseService, Vehicle, Driver, Document, ComplianceAlert, createDatabaseService } from './databaseService';
 import { S3StorageService, DocumentMetadata } from './s3StorageService';
 
-export interface StorageConfig {
-  mode: 'localStorage' | 'database';
-  databaseService?: DatabaseService;
+export interface StorageManagerOptions {
+  mode?: 'localStorage' | 'database';
   s3Service?: S3StorageService;
   organizationId?: string;
 }
 
 export class StorageManager {
   private mode: 'localStorage' | 'database';
-  private databaseService?: DatabaseService;
+  private databaseService: DatabaseService | null;
   private s3Service?: S3StorageService;
   private organizationId: string;
 
@@ -25,11 +24,18 @@ export class StorageManager {
     ALERTS: 'truckbo_alerts',
   };
 
-  constructor(config: StorageConfig) {
-    this.mode = config.mode;
-    this.databaseService = config.databaseService;
-    this.s3Service = config.s3Service;
-    this.organizationId = config.organizationId || 'default-org';
+  constructor(options: StorageManagerOptions = {}) {
+    this.mode = options.mode ?? 'localStorage';
+    this.databaseService = null;
+    this.s3Service = options.s3Service;
+    this.organizationId = options.organizationId || 'default-org';
+  }
+
+  private requireDatabaseService(): DatabaseService {
+    if (!this.databaseService) {
+      this.databaseService = createDatabaseService();
+    }
+    return this.databaseService;
   }
 
   // ==========================================
@@ -37,63 +43,67 @@ export class StorageManager {
   // ==========================================
 
   async getVehicles(): Promise<Vehicle[]> {
-    if (this.mode === 'database' && this.databaseService) {
-      return await this.databaseService.getVehiclesByOrganization(this.organizationId);
-    } else {
-      // localStorage fallback
-      const stored = localStorage.getItem(this.STORAGE_KEYS.VEHICLES);
-      return stored ? JSON.parse(stored) : [];
+    if (this.mode === 'database') {
+      const db = this.requireDatabaseService();
+      return await db.getVehiclesByOrganization();
     }
+
+    // localStorage fallback
+    const stored = localStorage.getItem(this.STORAGE_KEYS.VEHICLES);
+    return stored ? JSON.parse(stored) : [];
   }
 
   async createVehicle(vehicleData: Omit<Vehicle, 'id' | 'createdAt' | 'updatedAt'>): Promise<Vehicle> {
-    if (this.mode === 'database' && this.databaseService) {
-      return await this.databaseService.createVehicle({
+    if (this.mode === 'database') {
+      const db = this.requireDatabaseService();
+      return await db.createVehicle({
         ...vehicleData,
         organizationId: this.organizationId,
       });
-    } else {
-      // localStorage fallback
-      const vehicles = await this.getVehicles();
-      const newVehicle: Vehicle = {
-        ...vehicleData,
-        id: this.generateId(),
-        organizationId: this.organizationId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      vehicles.push(newVehicle);
-      localStorage.setItem(this.STORAGE_KEYS.VEHICLES, JSON.stringify(vehicles));
-      return newVehicle;
     }
+
+    // localStorage fallback
+    const vehicles = await this.getVehicles();
+    const newVehicle: Vehicle = {
+      ...vehicleData,
+      id: this.generateId(),
+      organizationId: this.organizationId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    vehicles.push(newVehicle);
+    localStorage.setItem(this.STORAGE_KEYS.VEHICLES, JSON.stringify(vehicles));
+    return newVehicle;
   }
 
   async updateVehicle(id: string, updates: Partial<Vehicle>): Promise<Vehicle | null> {
-    if (this.mode === 'database' && this.databaseService) {
-      return await this.databaseService.updateVehicle(id, updates);
-    } else {
-      // localStorage fallback
-      const vehicles = await this.getVehicles();
-      const index = vehicles.findIndex(v => v.id === id);
-      if (index !== -1) {
-        vehicles[index] = { ...vehicles[index], ...updates, updatedAt: new Date() };
-        localStorage.setItem(this.STORAGE_KEYS.VEHICLES, JSON.stringify(vehicles));
-        return vehicles[index];
-      }
-      return null;
+    if (this.mode === 'database') {
+      const db = this.requireDatabaseService();
+      return await db.updateVehicle(id, updates);
     }
+
+    // localStorage fallback
+    const vehicles = await this.getVehicles();
+    const index = vehicles.findIndex(v => v.id === id);
+    if (index !== -1) {
+      vehicles[index] = { ...vehicles[index], ...updates, updatedAt: new Date() };
+      localStorage.setItem(this.STORAGE_KEYS.VEHICLES, JSON.stringify(vehicles));
+      return vehicles[index];
+    }
+    return null;
   }
 
   async deleteVehicle(id: string): Promise<boolean> {
-    if (this.mode === 'database' && this.databaseService) {
-      return await this.databaseService.deleteVehicle(id);
-    } else {
-      // localStorage fallback
-      const vehicles = await this.getVehicles();
-      const filtered = vehicles.filter(v => v.id !== id);
-      localStorage.setItem(this.STORAGE_KEYS.VEHICLES, JSON.stringify(filtered));
-      return filtered.length < vehicles.length;
+    if (this.mode === 'database') {
+      const db = this.requireDatabaseService();
+      return await db.deleteVehicle(id);
     }
+
+    // localStorage fallback
+    const vehicles = await this.getVehicles();
+    const filtered = vehicles.filter(v => v.id !== id);
+    localStorage.setItem(this.STORAGE_KEYS.VEHICLES, JSON.stringify(filtered));
+    return filtered.length < vehicles.length;
   }
 
   // ==========================================
@@ -101,51 +111,54 @@ export class StorageManager {
   // ==========================================
 
   async getDrivers(): Promise<Driver[]> {
-    if (this.mode === 'database' && this.databaseService) {
-      return await this.databaseService.getDriversByOrganization(this.organizationId);
-    } else {
-      // localStorage fallback
-      const stored = localStorage.getItem(this.STORAGE_KEYS.DRIVERS);
-      return stored ? JSON.parse(stored) : [];
+    if (this.mode === 'database') {
+      const db = this.requireDatabaseService();
+      return await db.getDriversByOrganization();
     }
+
+    // localStorage fallback
+    const stored = localStorage.getItem(this.STORAGE_KEYS.DRIVERS);
+    return stored ? JSON.parse(stored) : [];
   }
 
   async createDriver(driverData: Omit<Driver, 'id' | 'createdAt' | 'updatedAt'>): Promise<Driver> {
-    if (this.mode === 'database' && this.databaseService) {
-      return await this.databaseService.createDriver({
+    if (this.mode === 'database') {
+      const db = this.requireDatabaseService();
+      return await db.createDriver({
         ...driverData,
         organizationId: this.organizationId,
       });
-    } else {
-      // localStorage fallback
-      const drivers = await this.getDrivers();
-      const newDriver: Driver = {
-        ...driverData,
-        id: this.generateId(),
-        organizationId: this.organizationId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      drivers.push(newDriver);
-      localStorage.setItem(this.STORAGE_KEYS.DRIVERS, JSON.stringify(drivers));
-      return newDriver;
     }
+
+    // localStorage fallback
+    const drivers = await this.getDrivers();
+    const newDriver: Driver = {
+      ...driverData,
+      id: this.generateId(),
+      organizationId: this.organizationId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    drivers.push(newDriver);
+    localStorage.setItem(this.STORAGE_KEYS.DRIVERS, JSON.stringify(drivers));
+    return newDriver;
   }
 
   async updateDriver(id: string, updates: Partial<Driver>): Promise<Driver | null> {
-    if (this.mode === 'database' && this.databaseService) {
-      return await this.databaseService.updateDriver(id, updates);
-    } else {
-      // localStorage fallback
-      const drivers = await this.getDrivers();
-      const index = drivers.findIndex(d => d.id === id);
-      if (index !== -1) {
-        drivers[index] = { ...drivers[index], ...updates, updatedAt: new Date() };
-        localStorage.setItem(this.STORAGE_KEYS.DRIVERS, JSON.stringify(drivers));
-        return drivers[index];
-      }
-      return null;
+    if (this.mode === 'database') {
+      const db = this.requireDatabaseService();
+      return await db.updateDriver(id, updates);
     }
+
+    // localStorage fallback
+    const drivers = await this.getDrivers();
+    const index = drivers.findIndex(d => d.id === id);
+    if (index !== -1) {
+      drivers[index] = { ...drivers[index], ...updates, updatedAt: new Date() };
+      localStorage.setItem(this.STORAGE_KEYS.DRIVERS, JSON.stringify(drivers));
+      return drivers[index];
+    }
+    return null;
   }
 
   // ==========================================
@@ -158,7 +171,9 @@ export class StorageManager {
     entityId: string,
     documentType: string
   ): Promise<{ document: Document; s3Result?: any }> {
-    if (this.mode === 'database' && this.databaseService && this.s3Service) {
+    if (this.mode === 'database' && this.s3Service) {
+      const db = this.requireDatabaseService();
+
       // Upload to S3 first
       const metadata: DocumentMetadata = {
         organizationId: this.organizationId,
@@ -191,61 +206,64 @@ export class StorageManager {
         uploadedBy: 'current-user-id', // TODO: Get from auth context
       };
 
-      const document = await this.databaseService.createDocument(documentData);
+      const document = await db.createDocument(documentData);
       
       return { document, s3Result };
-    } else {
-      // localStorage fallback - simulate document upload
-      const documents = await this.getDocuments();
-      const newDocument: Document = {
-        id: this.generateId(),
-        organizationId: this.organizationId,
-        documentType,
-        documentCategory: `${entityType}_docs`,
-        originalFilename: file.name,
-        fileSize: file.size,
-        fileType: file.type,
-        s3Key: `local/${this.generateId()}/${file.name}`,
-        processingStatus: 'completed',
-        vehicleId: entityType === 'vehicle' ? entityId : undefined,
-        driverId: entityType === 'driver' ? entityId : undefined,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      
-      documents.push(newDocument);
-      localStorage.setItem(this.STORAGE_KEYS.DOCUMENTS, JSON.stringify(documents));
-      
-      return { document: newDocument };
     }
+
+    // localStorage fallback - simulate document upload
+    const documents = await this.getDocuments();
+    const newDocument: Document = {
+      id: this.generateId(),
+      organizationId: this.organizationId,
+      documentType,
+      documentCategory: `${entityType}_docs`,
+      originalFilename: file.name,
+      fileSize: file.size,
+      fileType: file.type,
+      s3Key: `local/${this.generateId()}/${file.name}`,
+      processingStatus: 'completed',
+      vehicleId: entityType === 'vehicle' ? entityId : undefined,
+      driverId: entityType === 'driver' ? entityId : undefined,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    
+    documents.push(newDocument);
+    localStorage.setItem(this.STORAGE_KEYS.DOCUMENTS, JSON.stringify(documents));
+    
+    return { document: newDocument };
   }
 
   async getDocuments(): Promise<Document[]> {
-    if (this.mode === 'database' && this.databaseService) {
-      // Get all documents for organization (would need pagination in real app)
-      const result = await this.databaseService.query(
-        'SELECT * FROM documents WHERE organization_id = $1 ORDER BY created_at DESC',
-        [this.organizationId]
-      );
-      return result.rows;
-    } else {
-      // localStorage fallback
-      const stored = localStorage.getItem(this.STORAGE_KEYS.DOCUMENTS);
-      return stored ? JSON.parse(stored) : [];
+    if (this.mode === 'database') {
+      const db = this.requireDatabaseService();
+      try {
+        // Empty search term returns the latest documents for the authenticated organization.
+        return await db.searchDocuments('');
+      } catch (error) {
+        console.warn('Failed to fetch documents from API, returning empty list', error);
+        return [];
+      }
     }
+
+    // localStorage fallback
+    const stored = localStorage.getItem(this.STORAGE_KEYS.DOCUMENTS);
+    return stored ? JSON.parse(stored) : [];
   }
 
   async getDocumentsByEntity(entityType: 'vehicle' | 'driver', entityId: string): Promise<Document[]> {
-    if (this.mode === 'database' && this.databaseService) {
-      return await this.databaseService.getDocumentsByEntity(entityType, entityId);
-    } else {
-      // localStorage fallback
-      const documents = await this.getDocuments();
-      return documents.filter(doc => 
-        (entityType === 'vehicle' && doc.vehicleId === entityId) ||
-        (entityType === 'driver' && doc.driverId === entityId)
-      );
+    if (this.mode === 'database') {
+      const db = this.requireDatabaseService();
+      return await db.getDocumentsByEntity(entityType, entityId);
     }
+
+    // localStorage fallback
+    const documents = await this.getDocuments();
+    return documents.filter(doc =>
+      (entityType === 'vehicle' && doc.vehicleId === entityId) ||
+      (entityType === 'driver' && doc.driverId === entityId)
+    );
   }
 
   // ==========================================
@@ -253,36 +271,38 @@ export class StorageManager {
   // ==========================================
 
   async getActiveAlerts(): Promise<ComplianceAlert[]> {
-    if (this.mode === 'database' && this.databaseService) {
-      return await this.databaseService.getActiveAlertsByOrganization(this.organizationId);
-    } else {
-      // localStorage fallback
-      const stored = localStorage.getItem(this.STORAGE_KEYS.ALERTS);
-      const alerts = stored ? JSON.parse(stored) : [];
-      return alerts.filter((alert: ComplianceAlert) => alert.status === 'active');
+    if (this.mode === 'database') {
+      const db = this.requireDatabaseService();
+      return await db.getActiveAlertsByOrganization();
     }
+
+    // localStorage fallback
+    const stored = localStorage.getItem(this.STORAGE_KEYS.ALERTS);
+    const alerts = stored ? JSON.parse(stored) : [];
+    return alerts.filter((alert: ComplianceAlert) => alert.status === 'active');
   }
 
   async createAlert(alertData: Omit<ComplianceAlert, 'id' | 'createdAt' | 'updatedAt'>): Promise<ComplianceAlert> {
-    if (this.mode === 'database' && this.databaseService) {
-      return await this.databaseService.createComplianceAlert({
+    if (this.mode === 'database') {
+      const db = this.requireDatabaseService();
+      return await db.createComplianceAlert({
         ...alertData,
         organizationId: this.organizationId,
       });
-    } else {
-      // localStorage fallback
-      const alerts = JSON.parse(localStorage.getItem(this.STORAGE_KEYS.ALERTS) || '[]');
-      const newAlert: ComplianceAlert = {
-        ...alertData,
-        id: this.generateId(),
-        organizationId: this.organizationId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      alerts.push(newAlert);
-      localStorage.setItem(this.STORAGE_KEYS.ALERTS, JSON.stringify(alerts));
-      return newAlert;
     }
+
+    // localStorage fallback
+    const alerts = JSON.parse(localStorage.getItem(this.STORAGE_KEYS.ALERTS) || '[]');
+    const newAlert: ComplianceAlert = {
+      ...alertData,
+      id: this.generateId(),
+      organizationId: this.organizationId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    alerts.push(newAlert);
+    localStorage.setItem(this.STORAGE_KEYS.ALERTS, JSON.stringify(alerts));
+    return newAlert;
   }
 
   // ==========================================
@@ -293,9 +313,11 @@ export class StorageManager {
    * Migrate data from localStorage to PostgreSQL
    */
   async migrateToDatabase(): Promise<{ success: boolean; migrated: any; errors: any[] }> {
-    if (this.mode !== 'database' || !this.databaseService) {
+    if (this.mode !== 'database') {
       throw new Error('Database service not configured for migration');
     }
+
+    const db = this.requireDatabaseService();
 
     const migrated = {
       vehicles: 0,
@@ -311,7 +333,7 @@ export class StorageManager {
       for (const vehicle of localVehicles) {
         try {
           const { id, createdAt, updatedAt, ...vehicleData } = vehicle;
-          await this.databaseService.createVehicle({
+          await db.createVehicle({
             ...vehicleData,
             organizationId: this.organizationId,
           });
@@ -326,7 +348,7 @@ export class StorageManager {
       for (const driver of localDrivers) {
         try {
           const { id, createdAt, updatedAt, ...driverData } = driver;
-          await this.databaseService.createDriver({
+          await db.createDriver({
             ...driverData,
             organizationId: this.organizationId,
           });
@@ -360,8 +382,9 @@ export class StorageManager {
       s3: undefined as boolean | undefined,
     };
 
-    if (this.databaseService) {
-      const dbHealth = await this.databaseService.healthCheck();
+    if (this.mode === 'database') {
+      const db = this.requireDatabaseService();
+      const dbHealth = await db.healthCheck();
       health.database = dbHealth.healthy;
     }
 
@@ -386,6 +409,7 @@ export class StorageManager {
    */
   switchMode(newMode: 'localStorage' | 'database'): void {
     this.mode = newMode;
+    this.databaseService = null;
   }
 
   /**
@@ -397,16 +421,6 @@ export class StorageManager {
 }
 
 // Factory function for creating storage manager
-export function createStorageManager(
-  mode: 'localStorage' | 'database' = 'localStorage',
-  databaseService?: DatabaseService,
-  s3Service?: S3StorageService,
-  organizationId?: string
-): StorageManager {
-  return new StorageManager({
-    mode,
-    databaseService,
-    s3Service,
-    organizationId,
-  });
+export function createStorageManager(options: StorageManagerOptions = {}): StorageManager {
+  return new StorageManager(options);
 }

@@ -95,21 +95,9 @@ export interface RegisterCompanyData {
   };
 }
 
-interface LoginAttemptRecord {
-  email: string;
-  attempts: number;
-  lastAttempt: string;
-  lockedUntil?: string;
-}
-
 class AuthenticationService {
   private readonly errorHandler = new ErrorHandlerService();
   private readonly SESSION_KEY = 'truckbo_session';
-  private readonly COMPANIES_KEY = 'truckbo_companies';
-  private readonly USERS_KEY = 'truckbo_users';
-  private readonly LOGIN_ATTEMPTS_KEY = 'truckbo_login_attempts';
-  private readonly MAX_LOGIN_ATTEMPTS = 5;
-  private readonly LOCKOUT_DURATION = 15 * 60 * 1000; // 15 minutes
   private currentSession: AuthSession | null = null;
   private sessionListeners: ((session: AuthSession | null) => void)[] = [];
 
@@ -134,15 +122,26 @@ class AuthenticationService {
       }
 
       const result = await response.json();
-      console.log('🏗️ Demo authentication data initialized via API');
-      console.log('🔐 Demo password for all accounts: TruckBo2025!');
-      
+      console.log('[auth] Demo authentication data initialized via API', { result });
+      console.log('[auth] Demo password for all accounts: TruckBo2025!');
     } catch (error) {
       console.error('Failed to initialize demo data:', error);
-      this.errorHandler.handleError(
+      const context = {
+        layer: 'frontend' as const,
+        component: 'AuthenticationService',
+        operation: 'initializeDemo'
+      };
+      const appError = this.errorHandler.createError(
         'Failed to initialize demo data',
-        'Please check your server connection and try again'
+        'auth',
+        'medium',
+        {
+          originalError: error as Error,
+          userMessage: 'Unable to prepare demo accounts. Please check the server connection and try again.',
+          context
+        }
       );
+      void this.errorHandler.handleError(appError, context);
     }
   }
 
@@ -163,17 +162,14 @@ class AuthenticationService {
         })
       });
 
-      const apiResponse = await response.json();
-      console.log('🔍 Login API Response:', apiResponse);
+      const apiPayload = await response.json();
+      console.log('[auth] Login API response', apiPayload);
 
       if (!response.ok) {
-        throw new Error(apiResponse.message || 'Login failed');
+        throw new Error(apiPayload?.message ?? 'Login failed');
       }
 
-      // Extract data from wrapped API response
-      const data = apiResponse.data;
-      
-      // Create session from API response data
+      const data = apiPayload.data;
       const session: AuthSession = {
         user: data.user,
         company: data.company,
@@ -181,28 +177,36 @@ class AuthenticationService {
         expiresAt: data.expiresAt,
         refreshToken: data.refreshToken
       };
-      console.log('🔍 Created Session:', session);
 
       this.currentSession = session;
       this.saveSession(session);
       this.notifySessionListeners();
 
-      this.errorHandler.showSuccess(`Welcome back, ${data.user?.firstName || 'User'}!`);
-      console.log(`🔐 User logged in: ${data.user?.email || 'unknown'} (${data.company?.name || 'unknown'})`);
+      this.errorHandler.showSuccess(`Welcome back, ${data.user?.firstName ?? 'User'}!`);
+      console.log('[auth] User logged in', {
+        email: data.user?.email ?? 'unknown',
+        company: data.company?.name ?? 'unknown'
+      });
 
       return session;
-
     } catch (error) {
+      console.error('Login failed:', error);
+      const context = {
+        layer: 'frontend' as const,
+        component: 'AuthenticationService',
+        operation: 'login'
+      };
       const authError = this.errorHandler.createError(
         error instanceof Error ? error.message : 'Login failed',
         'auth',
         'medium',
         {
           originalError: error as Error,
-          userMessage: 'Please check your credentials and try again.'
+          userMessage: 'Please check your credentials and try again.',
+          context
         }
       );
-      this.errorHandler.handleError(authError);
+      void this.errorHandler.handleError(authError, context);
       throw error;
     }
   }
@@ -212,7 +216,6 @@ class AuthenticationService {
    */
   async registerCompany(data: RegisterCompanyData): Promise<AuthSession> {
     try {
-      // Validate password strength client-side first
       const passwordValidation = this.validatePasswordStrength(data.adminUser.password);
       if (!passwordValidation.isValid) {
         throw new Error(passwordValidation.message);
@@ -226,44 +229,52 @@ class AuthenticationService {
         body: JSON.stringify(data)
       });
 
-      const apiResponse = await response.json();
+      const apiPayload = await response.json();
 
       if (!response.ok) {
-        throw new Error(apiResponse.message || 'Registration failed');
+        throw new Error(apiPayload?.message ?? 'Registration failed');
       }
 
-      // Extract data from wrapped API response
-      const responseData = apiResponse.data;
-
-      // Create session from API response
+      const payload = apiPayload.data;
       const session: AuthSession = {
-        user: responseData.user,
-        company: responseData.company,
-        token: responseData.token,
-        expiresAt: responseData.expiresAt,
-        refreshToken: responseData.refreshToken
+        user: payload.user,
+        company: payload.company,
+        token: payload.token,
+        expiresAt: payload.expiresAt,
+        refreshToken: payload.refreshToken
       };
 
       this.currentSession = session;
       this.saveSession(session);
       this.notifySessionListeners();
 
-      this.errorHandler.showSuccess(`Welcome to TruckBo Pro, ${responseData.user?.firstName || 'User'}! Your company has been registered.`);
-      console.log(`🏢 New company registered: ${responseData.company?.name || 'unknown'}`);
+      this.errorHandler.showSuccess(
+        `Welcome to TruckBo Pro, ${payload.user?.firstName ?? 'User'}! Your company has been registered.`
+      );
+      console.log('[auth] Company registered', {
+        company: payload.company?.name ?? 'unknown',
+        email: payload.user?.email ?? 'unknown'
+      });
 
       return session;
-
     } catch (error) {
+      console.error('Company registration failed:', error);
+      const context = {
+        layer: 'frontend' as const,
+        component: 'AuthenticationService',
+        operation: 'registerCompany'
+      };
       const authError = this.errorHandler.createError(
         error instanceof Error ? error.message : 'Registration failed',
         'auth',
         'medium',
         {
           originalError: error as Error,
-          userMessage: 'Please check your information and try again.'
+          userMessage: 'Please check your information and try again.',
+          context
         }
       );
-      this.errorHandler.handleError(authError);
+      void this.errorHandler.handleError(authError, context);
       throw error;
     }
   }
@@ -273,8 +284,10 @@ class AuthenticationService {
    */
   logout(): void {
     if (this.currentSession) {
-      console.log(`🔐 User logged out: ${this.currentSession.user?.email || 'unknown'}`);
-      this.errorHandler.showInfo(`Goodbye, ${this.currentSession.user?.firstName || 'User'}!`);
+      console.log('[auth] User logged out', {
+        email: this.currentSession.user?.email ?? 'unknown'
+      });
+      this.errorHandler.showInfo(`Goodbye, ${this.currentSession.user?.firstName ?? 'User'}!`);
     }
 
     this.currentSession = null;
@@ -293,30 +306,32 @@ class AuthenticationService {
    * Get current user
    */
   getCurrentUser(): User | null {
-    return this.currentSession?.user || null;
+    return this.currentSession?.user ?? null;
   }
 
   /**
    * Get current company
    */
   getCurrentCompany(): Company | null {
-    return this.currentSession?.company || null;
+    return this.currentSession?.company ?? null;
   }
 
   /**
    * Check if user is authenticated
    */
   isAuthenticated(): boolean {
-    if (!this.currentSession) return false;
-    
+    if (!this.currentSession) {
+      return false;
+    }
+
     const now = new Date();
     const expiresAt = new Date(this.currentSession.expiresAt);
-    
+
     if (now >= expiresAt) {
       this.logout();
       return false;
     }
-    
+
     return true;
   }
 
@@ -324,12 +339,12 @@ class AuthenticationService {
    * Check if user has specific permission
    */
   hasPermission(resource: Permission['resource'], action: Permission['actions'][0]): boolean {
-    if (!this.currentSession) return false;
-    
+    if (!this.currentSession) {
+      return false;
+    }
+
     const user = this.currentSession.user;
-    return user.permissions.some(p => 
-      p.resource === resource && p.actions.includes(action)
-    );
+    return user.permissions.some(permission => permission.resource === resource && permission.actions.includes(action));
   }
 
   /**
@@ -352,7 +367,7 @@ class AuthenticationService {
   subscribeToSession(listener: (session: AuthSession | null) => void): () => void {
     this.sessionListeners.push(listener);
     return () => {
-      this.sessionListeners = this.sessionListeners.filter(l => l !== listener);
+      this.sessionListeners = this.sessionListeners.filter(existing => existing !== listener);
     };
   }
 
@@ -368,56 +383,6 @@ class AuthenticationService {
   }
 
   /**
-   * Get subscription limits for a plan
-   */
-  private getSubscriptionLimits(plan: string) {
-    const limits = {
-      basic: { maxVehicles: 10, maxDrivers: 20, maxUsers: 3 },
-      professional: { maxVehicles: 50, maxDrivers: 100, maxUsers: 10 },
-      enterprise: { maxVehicles: 500, maxDrivers: 1000, maxUsers: 50 }
-    };
-    return limits[plan as keyof typeof limits] || limits.basic;
-  }
-
-  /**
-   * Get all permissions (admin)
-   */
-  private getAllPermissions(): Permission[] {
-    return [
-      { resource: 'vehicles', actions: ['create', 'read', 'update', 'delete', 'export'] },
-      { resource: 'drivers', actions: ['create', 'read', 'update', 'delete', 'export'] },
-      { resource: 'documents', actions: ['create', 'read', 'update', 'delete', 'export'] },
-      { resource: 'reports', actions: ['create', 'read', 'export'] },
-      { resource: 'users', actions: ['create', 'read', 'update', 'delete'] },
-      { resource: 'settings', actions: ['read', 'update'] }
-    ];
-  }
-
-  /**
-   * Get manager permissions
-   */
-  private getManagerPermissions(): Permission[] {
-    return [
-      { resource: 'vehicles', actions: ['create', 'read', 'update', 'export'] },
-      { resource: 'drivers', actions: ['create', 'read', 'update', 'export'] },
-      { resource: 'documents', actions: ['create', 'read', 'update', 'export'] },
-      { resource: 'reports', actions: ['create', 'read', 'export'] },
-      { resource: 'users', actions: ['read'] },
-      { resource: 'settings', actions: ['read'] }
-    ];
-  }
-
-  /**
-   * Generate secure session token using crypto
-   */
-  private async generateSecureToken(): Promise<string> {
-    // Use Web Crypto API for secure random generation
-    const array = new Uint8Array(32);
-    crypto.getRandomValues(array);
-    return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
-  }
-
-  /**
    * Validate password strength
    */
   private validatePasswordStrength(password: string): { isValid: boolean; message: string } {
@@ -426,7 +391,7 @@ class AuthenticationService {
     const hasLowerCase = /[a-z]/.test(password);
     const hasNumbers = /\d/.test(password);
     const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(password);
-    
+
     if (password.length < minLength) {
       return { isValid: false, message: `Password must be at least ${minLength} characters long` };
     }
@@ -445,7 +410,6 @@ class AuthenticationService {
     return { isValid: true, message: 'Password is strong' };
   }
 
-
   /**
    * Load session from storage
    */
@@ -453,18 +417,17 @@ class AuthenticationService {
     try {
       const sessionData = localStorage.getItem(this.SESSION_KEY);
       if (sessionData) {
-        const session = JSON.parse(sessionData);
-        
-        // Check if session is still valid
+        const session = JSON.parse(sessionData) as AuthSession;
+
         const now = new Date();
         const expiresAt = new Date(session.expiresAt);
-        
+
         if (now < expiresAt) {
           this.currentSession = session;
-          console.log(`🔐 Session restored for: ${session.user?.email || 'unknown'}`);
+          console.log(`[auth] Session restored for: ${session.user?.email ?? 'unknown'}`);
         } else {
           localStorage.removeItem(this.SESSION_KEY);
-          console.log('🔐 Session expired, removed from storage');
+          console.log('[auth] Session expired, removed from storage');
         }
       }
     } catch (error) {
@@ -486,7 +449,6 @@ class AuthenticationService {
   private notifySessionListeners(): void {
     this.sessionListeners.forEach(listener => listener(this.currentSession));
   }
-
 }
 
 export const authService = new AuthenticationService();

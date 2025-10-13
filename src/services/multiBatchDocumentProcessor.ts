@@ -2,7 +2,8 @@
 // Handles multiple document upload sessions and intelligent data reconciliation
 
 import { documentProcessor, ExtractedVehicleData } from './documentProcessor';
-import { persistentFleetStorage, VehicleRecord } from './persistentFleetStorage';
+import { VehicleRecord } from './persistentFleetStorage';
+import { fleetStorageAdapter, type FleetAdapterResult } from './fleetStorageAdapter';
 
 export interface DocumentBatch {
   id: string;
@@ -77,7 +78,7 @@ class MultiBatchDocumentProcessor {
     console.log(`📁 Processing new document batch: ${files.length} files`);
 
     // Process documents using existing document processor
-    const processingResult = await documentProcessor.processBulkDocuments(files);
+    const processingResult = await documentProcessor.processDocuments(files, () => undefined);
 
     // Create batch record
     const batch: DocumentBatch = {
@@ -270,32 +271,36 @@ class MultiBatchDocumentProcessor {
   }
 
   // Apply reconciled data to fleet storage
-  async applyReconciliation(): Promise<{ successful: VehicleRecord[]; failed: any[] }> {
+  async applyReconciliation(): Promise<FleetAdapterResult> {
     const state = this.getProcessingState();
     if (!state.reconciliationResult) {
       throw new Error('No reconciliation data available - process documents first');
     }
 
-    console.log(`📄 Applying reconciliation: ${state.reconciliationResult.summary.totalVehicles} vehicles`);
+    console.log(
+      `[MultiBatch] Applying reconciliation: ${state.reconciliationResult.summary.totalVehicles} vehicles`
+    );
 
-    // Combine all vehicle categories
     const allVehicles = [
       ...state.reconciliationResult.completeVehicles,
       ...state.reconciliationResult.registrationOnly,
       ...state.reconciliationResult.insuranceOnly
     ];
 
-    // Convert to format expected by persistent storage (remove id, dateAdded, lastUpdated)
     const vehiclesToAdd = allVehicles.map(vehicle => {
       const { id, dateAdded, lastUpdated, ...vehicleData } = vehicle;
       return vehicleData;
     });
 
-    // Add to persistent storage
-    const result = persistentFleetStorage.addVehicles(vehiclesToAdd);
-    
-    console.log(`✅ Applied reconciliation: ${result.successful.length} successful, ${result.failed.length} failed`);
-    
+    const result = await fleetStorageAdapter.addVehicles(vehiclesToAdd);
+
+    console.log('[MultiBatch] Applied reconciliation', {
+      processed: result.processed,
+      failed: result.failed,
+      errors: result.errors,
+      fallbackTriggered: result.fallbackTriggered
+    });
+
     return result;
   }
 

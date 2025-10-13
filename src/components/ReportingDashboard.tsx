@@ -20,7 +20,7 @@ export function ReportingDashboard() {
   const loadMetrics = async () => {
     try {
       setLoading(true);
-      const complianceMetrics = reportingService.calculateComplianceMetrics();
+      const complianceMetrics = await reportingService.calculateComplianceMetrics();
       setMetrics(complianceMetrics);
     } catch (error) {
       errorHandler.handleCriticalError(error, 'Loading compliance metrics');
@@ -36,16 +36,16 @@ export function ReportingDashboard() {
 
       switch (type) {
         case 'vehicle':
-          report = reportingService.generateVehicleComplianceReport();
+          report = await reportingService.generateVehicleComplianceReport();
           break;
         case 'driver':
-          report = reportingService.generateDriverComplianceReport();
+          report = await reportingService.generateDriverComplianceReport();
           break;
         case 'expiration':
-          report = reportingService.generateExpirationSummaryReport(90);
+          report = await reportingService.generateExpirationSummaryReport(90);
           break;
         case 'full_audit':
-          report = reportingService.generateFullAuditReport();
+          report = await reportingService.generateFullAuditReport();
           break;
         default:
           throw new Error('Invalid report type');

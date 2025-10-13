@@ -112,7 +112,15 @@ class DocumentStatusPoller {
           const timeoutId = setTimeout(pollFunction, this.pollingInterval);
           this.activePolls.set(jobId, timeoutId);
         } catch (error) {
-          logger.error('Error polling job ' + jobId + ':', error as Error);
+          logger.error(
+            'Error polling job ' + jobId,
+            {
+              component: 'DocumentStatusPoller',
+              operation: 'pollJobStatus',
+              metadata: { jobId, attempts }
+            },
+            error as Error
+          );
           logPoller('poll:error', {
             jobId,
             attempts,
@@ -188,7 +196,14 @@ class DocumentStatusPoller {
       logPoller('batch:complete', { jobCount: jobs.length });
       return results;
     } catch (error) {
-      logger.error('Error in multi-job polling:', error as Error);
+      logger.error(
+        'Error in multi-job polling',
+        {
+          component: 'DocumentStatusPoller',
+          operation: 'pollMultipleJobs'
+        },
+        error as Error
+      );
       logPoller('batch:error', { message: error instanceof Error ? error.message : 'Unknown error' });
       throw error;
     }

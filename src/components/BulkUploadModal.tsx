@@ -2,7 +2,8 @@
 // Allows adding multiple vehicles via CSV/VIN list to existing fleet
 
 import React, { useState, useRef } from 'react';
-import { persistentFleetStorage, VehicleRecord } from '../services/persistentFleetStorage';
+import type { VehicleRecord } from '../services/persistentFleetStorage';
+import { fleetStorageAdapter } from '../services/fleetStorageAdapter';
 
 interface BulkUploadModalProps {
   isOpen: boolean;
@@ -192,7 +193,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({
 
   const addVehiclesToFleet = async () => {
     const validVehicles = processedVehicles.filter(v => v.isValid);
-    
+
     if (validVehicles.length === 0) {
       setError('No valid vehicles to add');
       return;
@@ -201,7 +202,6 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({
     setIsProcessing(true);
 
     try {
-      // Convert to the format expected by persistent storage
       const vehiclesToAdd = validVehicles.map(v => ({
         vin: v.vin,
         make: v.make || 'Unknown',
@@ -209,25 +209,27 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({
         year: v.year || new Date().getFullYear(),
         licensePlate: v.licensePlate || `${v.vin.slice(-6)}`,
         dotNumber: v.dotNumber,
-        truckNumber: '', // Will auto-generate
+        truckNumber: '',
         status: v.status
       }));
 
-      const result = persistentFleetStorage.addVehicles(vehiclesToAdd);
-      
-      if (result.successful.length > 0) {
-        onVehiclesAdded(result.successful);
+      const result = await fleetStorageAdapter.addVehicles(vehiclesToAdd);
+
+      if (result.success && result.processed > 0) {
+        const fleet = await fleetStorageAdapter.getFleet();
+        const addedVehicles = fleet.filter(vehicle => validVehicles.some(v => v.vin === vehicle.vin));
+
+        onVehiclesAdded(addedVehicles as VehicleRecord[]);
         setProcessingStep('complete');
-        
-        // Auto-close after 2 seconds
+
         setTimeout(() => {
           handleClose();
         }, 2000);
       } else {
-        throw new Error('Failed to add vehicles to fleet');
+        throw new Error(result.errors.join(', ') || 'Failed to add vehicles to fleet');
       }
     } catch (error) {
-      setError(error instanceof Error ? error.message : String(error) || 'Failed to add vehicles');
+      setError(error instanceof Error ? error.message : 'Failed to add vehicles');
     } finally {
       setIsProcessing(false);
     }
@@ -538,3 +540,6 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({
     </div>
   );
 };
+
+
+

@@ -2,7 +2,8 @@
 // Allows adding single vehicles to existing fleet
 
 import React, { useState } from 'react';
-import { persistentFleetStorage, VehicleRecord } from '../services/persistentFleetStorage';
+import type { VehicleRecord } from '../services/persistentFleetStorage';
+import { fleetStorageAdapter } from '../services/fleetStorageAdapter';
 
 interface AddVehicleModalProps {
   isOpen: boolean;
@@ -81,26 +82,35 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({
     setIsSubmitting(true);
 
     try {
-      const newVehicle = persistentFleetStorage.addVehicle({
+      const payload = {
         vin: formData.vin.toUpperCase(),
         make: formData.make,
         model: formData.model,
         year: formData.year,
         licensePlate: formData.licensePlate.toUpperCase(),
         dotNumber: formData.dotNumber || undefined,
-        truckNumber: formData.truckNumber || '', // Will auto-generate if empty
+        truckNumber: formData.truckNumber || '',
         status: formData.status
-      });
+      } as const;
 
-      if (newVehicle) {
-        onVehicleAdded(newVehicle);
-        resetForm();
-        onClose();
+      const result = await fleetStorageAdapter.addVehicles([payload]);
+
+      if (result.success) {
+        const fleet = await fleetStorageAdapter.getFleet();
+        const addedVehicle = fleet.find(vehicle => vehicle.vin === payload.vin);
+
+        if (addedVehicle) {
+          onVehicleAdded(addedVehicle as VehicleRecord);
+          resetForm();
+          onClose();
+        } else {
+          setErrors({ general: 'Vehicle added but the refreshed fleet data could not be loaded.' });
+        }
       } else {
-        setErrors({ general: 'Failed to add vehicle. VIN may already exist.' });
+        setErrors({ general: result.errors.join(', ') || 'Failed to add vehicle. VIN may already exist.' });
       }
     } catch (error) {
-      setErrors({ general: error instanceof Error ? error.message : String(error) || 'Failed to add vehicle' });
+      setErrors({ general: error instanceof Error ? error.message : 'Failed to add vehicle' });
     } finally {
       setIsSubmitting(false);
     }
@@ -322,3 +332,4 @@ export const AddVehicleModal: React.FC<AddVehicleModalProps> = ({
     </div>
   );
 };
+

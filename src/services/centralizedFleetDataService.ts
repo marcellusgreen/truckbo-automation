@@ -1,14 +1,10 @@
 // Centralized Fleet Data Service - Single Source of Truth
 // Solves data synchronization issues by providing atomic operations and consistent state
 
-import { VehicleRecord } from './persistentFleetStorage';
-import { persistentFleetStorage } from './persistentFleetStorage';
-import { fleetDataManager } from './fleetDataManager';
+import { persistentFleetStorage, type VehicleRecord } from './persistentFleetStorage';
 import { reconcilerAPI, VehicleSummaryView, FleetDashboard } from './reconcilerAPI';
 import { eventBus, FleetEvents } from './eventBus';
 import { ExtractedVehicleData } from './documentProcessor';
-import { standardizeVehicleData, batchStandardizeVehicles } from '../utils/fieldStandardization';
-import { type StandardizedVehicle } from '../types/standardizedFields';
 import { authService } from './authService';
 import { isRefactorDebugEnabled, startRefactorTimer, refactorDebugLog } from '../utils/refactorDebug';
 
@@ -135,37 +131,29 @@ class CentralizedFleetDataService {
 
     try {
       // Phase 1: Add to persistent storage
-      const persistentVehicles = vehicleDataArray.map(data => ({
-        vin: data.vin || `UNKNOWN_${Date.now()}`,
-        make: data.make || 'Unknown',
-        model: data.model || 'Unknown',
-        year: data.year || new Date().getFullYear(),
-        licensePlate: data.licensePlate || 'Unknown',
-        dotNumber: data.dotNumber,
-        truckNumber: data.truckNumber || '',
-        status: 'active' as const,
-        registrationNumber: data.registrationNumber,
-        registrationState: data.registrationState,
-        registrationExpiry: data.registrationExpiry,
-        registeredOwner: data.registeredOwner,
-        insuranceCarrier: data.insuranceCarrier,
-        policyNumber: data.policyNumber,
-        insuranceExpiry: data.insuranceExpiry,
-        coverageAmount: data.coverageAmount
-      }));
+      const organizationId = authService.getCurrentCompany()?.id;
 
-      const persistentResult = persistentFleetStorage.addVehicles(persistentVehicles);
-      result.processed += persistentResult.successful.length;
-      result.failed += persistentResult.failed.length;
-
-      logDebug('addVehicles:persistentResult', {
-        processed: persistentResult.successful.length,
-        failed: persistentResult.failed.length
-      });
-
-      if (persistentResult.failed.length > 0) {
-        result.errors.push(...persistentResult.failed.map(f => f.error));
+      for (const vehicleData of vehicleDataArray) {
+        const payload = this.mapToPersistentVehiclePayload(vehicleData, organizationId);
+        try {
+          await persistentFleetStorage.addVehicle(payload);
+          result.processed += 1;
+        } catch (storageError) {
+          result.failed += 1;
+          const message = storageError instanceof Error ? storageError.message : String(storageError);
+          result.errors.push(`Persistent storage add failed for ${payload.vin}: ${message}`);
+          logDebug('addVehicles:persistentError', {
+            durationMs: stopTimer(),
+            vin: payload.vin,
+            message
+          });
+        }
       }
+
+      logDebug('addVehicles:persistentSummary', {
+        processed: result.processed,
+        failed: result.failed
+      });
 
       // Phase 2: Sync with reconcilerAPI
       for (const vehicleData of vehicleDataArray) {
@@ -334,6 +322,12 @@ class CentralizedFleetDataService {
 
     if (this.isLoading) {
       console.log('[FleetData] Already loading data, skipping refresh');
+      return;
+    }
+
+    const now = Date.now();
+    if (this.lastLoadTime && now - this.lastLoadTime < this.CACHE_DURATION) {
+      logDebug('initializeData:cacheHit', { ageMs: now - this.lastLoadTime });
       return;
     }
 
@@ -506,6 +500,55 @@ class CentralizedFleetDataService {
       nonCompliant,
       expiringDocuments,
       averageComplianceScore
+    };
+  }
+
+  private mapToPersistentVehiclePayload(
+    data: ExtractedVehicleData,
+    organizationId?: string
+  ): Omit<VehicleRecord, 'id' | 'dateAdded' | 'lastUpdated'> {
+    const extractedYear =
+      typeof data.year === 'number'
+        ? data.year
+        : Number.parseInt(String(data.year ?? ''), 10);
+    const sanitizedYear = Number.isFinite(extractedYear) ? extractedYear : new Date().getFullYear();
+
+    const toOptionalString = (value: unknown): string | undefined =>
+      typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+
+    const toOptionalNumber = (value: unknown): number | undefined => {
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+      }
+      if (typeof value === 'string') {
+        const parsed = Number.parseFloat(value);
+        return Number.isFinite(parsed) ? parsed : undefined;
+      }
+      return undefined;
+    };
+
+    return {
+      organizationId,
+      vin: toOptionalString(data.vin) ?? `UNKNOWN_${Date.now()}`,
+      make: toOptionalString(data.make) ?? 'Unknown',
+      model: toOptionalString(data.model) ?? 'Unknown',
+      year: sanitizedYear,
+      licensePlate: toOptionalString(data.licensePlate) ?? 'Unknown',
+      dotNumber: toOptionalString(data.dotNumber),
+      truckNumber: toOptionalString(data.truckNumber) ?? '',
+      status: 'active',
+      registrationNumber: toOptionalString(data.registrationNumber),
+      registrationState: toOptionalString(data.registrationState),
+      registrationExpirationDate: toOptionalString(data.registrationExpirationDate),
+      registeredOwner: toOptionalString(data.registeredOwner),
+      insuranceCarrier: toOptionalString(data.insuranceCarrier),
+      policyNumber: toOptionalString(data.policyNumber),
+      insuranceExpirationDate: toOptionalString(data.insuranceExpirationDate),
+      coverageAmount: toOptionalNumber(data.coverageAmount),
+      complianceStatus: 'unknown',
+      lastInspectionDate: undefined,
+      nextInspectionDue: undefined,
+      complianceData: undefined
     };
   }
 

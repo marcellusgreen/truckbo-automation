@@ -4,8 +4,8 @@
  * Enhanced with comprehensive error handling and logging
  */
 
-import { vehicleReconciler, type VehicleRecord, type ReconcilerStats } from './vehicleReconciler';
-import { eventBus, FleetEvents } from './eventBus';
+import { vehicleReconciler, type ReconcilerStats } from './vehicleReconciler';
+import { FleetEvents } from './eventBus';
 import { logger, LogContext } from './logger';
 import { errorHandler, withErrorHandling } from './errorHandlingService';
 
@@ -103,7 +103,7 @@ class ReconcilerAPI {
       
       const vehicle = vehicleReconciler.getVehicleSummary(vin);
       if (!vehicle) {
-        logger.warn('Vehicle not found in reconciler', context, undefined, { vin });
+        logger.warn('Vehicle not found in reconciler', context, { vin });
         logger.endOperation('Getting vehicle summary view', operationId, context, { found: false });
         return null;
       }
@@ -632,7 +632,7 @@ class ReconcilerAPI {
           vehicleSummary: vehicleSummary || undefined
         };
       } else {
-        logger.warn('Document addition failed or no VIN identified', context, undefined, {
+        logger.warn('Document addition failed or no VIN identified', context, {
           success: result.success,
           hasVehicleVIN: !!result.vehicleVIN,
           warningCount: result.warnings?.length || 0

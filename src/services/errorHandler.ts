@@ -3,7 +3,7 @@
 // Maintains existing API while adding comprehensive error handling
 
 import { logger, LogContext } from './logger';
-import { errorHandler as newErrorHandler, AppError as NewAppError, ErrorSeverity, ErrorCategory, withErrorHandling } from './errorHandlingService';
+import { errorHandler as newErrorHandler, withErrorHandling } from './errorHandlingService';
 
 // Legacy interface for backward compatibility
 export interface AppError {
@@ -360,7 +360,7 @@ class LegacyErrorHandlerService {
   ): Promise<T> {
     const result = await newErrorHandler.handleOperationWithRetry(
       operation,
-      fallback,
+      async () => fallback(),
       context,
       {
         enableRetry: true,
@@ -379,7 +379,7 @@ class LegacyErrorHandlerService {
         userMessage: result.error.userMessage || 'Operation failed, using fallback data',
         details: { operationName, fallbackUsed: result.fallbackUsed },
         timestamp: new Date(),
-        resolved: result.fallbackUsed // Resolved if fallback worked
+        resolved: Boolean(result.fallbackUsed) // Resolved if fallback worked
       };
 
       this.addError(appError);
@@ -426,13 +426,13 @@ class LegacyErrorHandlerService {
 
   /**
    * Show warning notification
-   */
+  */
   showWarning(message: string, duration: number = 5000): void {
     logger.warn('Showing warning notification', {
       layer: 'frontend',
       component: 'ErrorHandler', 
       operation: 'show_warning'
-    }, undefined, { message });
+    }, { message });
 
     this.addNotification({
       id: this.generateId(),

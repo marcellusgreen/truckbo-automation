@@ -5,7 +5,6 @@ import {
   StandardizedVehicle, 
   StandardizedDriver, 
   StandardizedDocument,
-  FIELD_NAMING_STANDARDS,
   VehicleStatus,
   ComplianceStatus,
   DataSource
@@ -240,6 +239,7 @@ export function standardizeDocumentData(legacyData: any, source: DataSource = 'd
   };
   
   standardized.metadata = {
+    dataSource: source,
     uploadedAt: new Date().toISOString(),
     lastUpdated: new Date().toISOString(),
     ...standardized.metadata
@@ -412,7 +412,7 @@ function createReverseMappings(): Record<string, Record<string, string>> {
   };
   
   // Create reverse mappings for each category
-  Object.entries(FIELD_MAPPINGS).forEach(([category, mappings]) => {
+  Object.entries(FIELD_MAPPINGS).forEach(([, mappings]) => {
     Object.entries(mappings).forEach(([legacy, standard]) => {
       // Add to all formats by default
       reverseMappings.persistent[standard] = legacy;
