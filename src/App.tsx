@@ -2327,7 +2327,23 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ setCurrentPage }) => {
     if (!fleetHookEnabled) {
       return;
     }
-    setFleetStats(hookFleetStats);
+
+    setFleetStats((prev) => {
+      const next = hookFleetStats;
+      if (
+        prev.total === next.total &&
+        prev.active === next.active &&
+        prev.inactive === next.inactive &&
+        prev.compliant === next.compliant &&
+        prev.nonCompliant === next.nonCompliant &&
+        prev.expiringDocuments === next.expiringDocuments &&
+        prev.averageComplianceScore === next.averageComplianceScore
+      ) {
+        return prev;
+      }
+
+      return next;
+    });
   }, [fleetHookEnabled, hookFleetStats]);
 
   const displayedFleetStats = fleetHookEnabled ? hookFleetStats : fleetStats;
