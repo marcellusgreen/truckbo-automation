@@ -9,6 +9,7 @@ import { HttpStatus, ApiErrorCode, RequestContext } from '../types/apiTypes';
 import { VehicleRecord } from '../../../shared/types/vehicleTypes';
 import { logger } from '../../../shared/services/logger';
 import { neonFleetStorage as persistentFleetStorage } from '../../../shared/services/neonFleetStorage';
+import { truckNumberParser } from '../../../shared/utils/truckNumberParser';
 
 const router = Router();
 
@@ -179,7 +180,36 @@ router.post('/v1/vehicles', asyncHandler(async (req: Request, res: Response) => 
   const startTime = Date.now();
 
   try {
-    const vehicleInput: ApiVehicleInput = req.body;
+    const rawVehicleInput: ApiVehicleInput = (req.body || {}) as ApiVehicleInput;
+    const organizationId = context.companyId ?? (req as any).user?.companyId;
+
+    if (!organizationId) {
+      throw ApiError.unauthorized('Organization context is required to manage vehicles');
+    }
+
+    const vehicleInput: ApiVehicleInput = {
+      ...rawVehicleInput,
+      vin: rawVehicleInput.vin?.trim().toUpperCase(),
+      make: rawVehicleInput.make?.trim(),
+      model: rawVehicleInput.model?.trim(),
+      licensePlate: rawVehicleInput.licensePlate?.trim().toUpperCase(),
+      dotNumber: rawVehicleInput.dotNumber?.trim(),
+      truckNumber: rawVehicleInput.truckNumber?.trim()
+    };
+
+    if (!vehicleInput.truckNumber) {
+      const generatedTruck = truckNumberParser.parseTruckNumber({
+        vin: vehicleInput.vin ?? '',
+        licensePlate: vehicleInput.licensePlate ?? '',
+        dotNumber: vehicleInput.dotNumber,
+        make: vehicleInput.make,
+        model: vehicleInput.model,
+        registrationNumber: vehicleInput.registration?.number,
+        insuranceCarrier: vehicleInput.insurance?.carrier,
+        policyNumber: vehicleInput.insurance?.policyNumber
+      });
+      vehicleInput.truckNumber = generatedTruck.truckNumber;
+    }
 
     // Validate required fields
     if (!vehicleInput.vin || !vehicleInput.make || !vehicleInput.model || 
@@ -214,14 +244,25 @@ router.post('/v1/vehicles', asyncHandler(async (req: Request, res: Response) => 
 
     // Check if vehicle with this VIN already exists
     const existingVehicles = await persistentFleetStorage.getAllVehicles();
-    const existingVehicle = existingVehicles.find((v: VehicleRecord) => v.vin === vehicleInput.vin);
+    const existingVehicle = existingVehicles.find((v: VehicleRecord) => {
+      const existingOrgId = (v as any).organizationId ?? (v as any).organization_id;
+      return v.vin === vehicleInput.vin && (!existingOrgId || existingOrgId === organizationId);
+    });
 
     let savedVehicle: VehicleRecord;
     let isUpdate = false;
 
     if (existingVehicle) {
       // Update existing vehicle
-      const updateData = vehicleTransformer.reverseInput(vehicleInput);
+      const targetOrganizationId =
+        (existingVehicle as any).organizationId ??
+        (existingVehicle as any).organization_id ??
+        organizationId;
+
+      const updateData = {
+        ...vehicleTransformer.reverseInput(vehicleInput),
+        organizationId: targetOrganizationId
+      };
       const updatedVehicle = await persistentFleetStorage.updateVehicle(existingVehicle.id, updateData);
       
       if (!updatedVehicle) {
@@ -244,7 +285,10 @@ router.post('/v1/vehicles', asyncHandler(async (req: Request, res: Response) => 
 
     } else {
       // Create new vehicle
-      const newVehicleData = vehicleTransformer.reverseInput(vehicleInput);
+      const newVehicleData = {
+        ...vehicleTransformer.reverseInput(vehicleInput),
+        organizationId
+      };
       savedVehicle = await persistentFleetStorage.addVehicle({
         ...newVehicleData,
         id: `vehicle_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
