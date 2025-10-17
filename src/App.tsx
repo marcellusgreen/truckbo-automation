@@ -2301,7 +2301,6 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ setCurrentPage }) => {
 
   useEffect(() => {
     if (fleetHookEnabled) {
-      updateStats();
       return;
     }
 
