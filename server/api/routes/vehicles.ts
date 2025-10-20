@@ -4,6 +4,7 @@
 import { Router, Request, Response } from 'express';
 import { ApiResponseBuilder } from '../core/ApiResponseBuilder';
 import { ApiError, asyncHandler, requestContext } from '../middleware/errorHandling';
+import { authenticateToken } from '../middleware/authentication';
 import { vehicleTransformer, ApiVehicleInput } from '../transformers/VehicleTransformer';
 import { HttpStatus, ApiErrorCode, RequestContext } from '../types/apiTypes';
 import { VehicleRecord } from '../../../shared/types/vehicleTypes';
@@ -13,8 +14,9 @@ import { truckNumberParser } from '../../../shared/utils/truckNumberParser';
 
 const router = Router();
 
-// Apply request context middleware to all routes
+// Apply request context + authentication middleware to all routes
 router.use(requestContext);
+router.use(authenticateToken);
 
 /**
  * GET /api/v1/vehicles
