@@ -1,6 +1,6 @@
 import { isRefactorDebugEnabled, refactorDebugLog } from '../utils/refactorDebug';
 
-export type FleetEventType = 
+export type FleetEventType =
   | 'fleet_data_changed'
   | 'vehicle_added'
   | 'vehicle_updated'
@@ -110,11 +110,15 @@ class EventBus {
     };
   }
 
-  emit(eventType: FleetEventType, data?: unknown, options?: {
-    source?: string;
-    vehicleVIN?: string;
-    metadata?: Record<string, unknown>;
-  }): void {
+  emit(
+    eventType: FleetEventType,
+    data?: unknown,
+    options?: {
+      source?: string;
+      vehicleVIN?: string;
+      metadata?: Record<string, unknown>;
+    }
+  ): void {
     const event: FleetEvent = {
       type: eventType,
       timestamp: Date.now(),
@@ -141,7 +145,7 @@ class EventBus {
 
     const specificListeners = this.listeners.get(eventType);
     if (specificListeners) {
-      specificListeners.forEach(listener => {
+      specificListeners.forEach((listener) => {
         try {
           listener(event);
         } catch (error) {
@@ -150,7 +154,7 @@ class EventBus {
       });
     }
 
-    this.globalListeners.forEach(listener => {
+    this.globalListeners.forEach((listener) => {
       try {
         listener(event);
       } catch (error) {
@@ -207,11 +211,15 @@ export const FleetEvents = {
   },
 
   vehicleDeleted: (vehicleVIN: string, source: string = 'unknown') => {
-    eventBus.emit('vehicle_deleted', { vin: vehicleVIN }, {
-      source,
-      vehicleVIN,
-      metadata: { action: 'delete' }
-    });
+    eventBus.emit(
+      'vehicle_deleted',
+      { vin: vehicleVIN },
+      {
+        source,
+        vehicleVIN,
+        metadata: { action: 'delete' }
+      }
+    );
     eventBus.emit('fleet_data_changed', { deletedVIN: vehicleVIN }, { source });
   },
 
