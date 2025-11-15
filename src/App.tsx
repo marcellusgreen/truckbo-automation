@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from 'react';
-import { persistentFleetStorage, VehicleRecord } from './services/persistentFleetStorage';
-import { fleetDataManager } from './services/fleetDataManager';
-import { validateVIN, parseCSVFile, downloadSampleCSV } from './utils';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { VehicleRecord } from './services/persistentFleetStorage';
+import { downloadSampleCSV } from './utils';
 import { 
   ParsedVIN, 
   ComplianceTask, 
+  ComplianceStats,
   OnboardingMethod, 
   OnboardingPageProps,
   DashboardPageProps
@@ -25,1005 +25,700 @@ import { comprehensiveComplianceService } from './services/comprehensiveComplian
 import { documentDownloadService } from './services/documentDownloadService';
 import { reconcilerAPI } from './services/reconcilerAPI';
 import { safeVehicleData } from './utils/safeDataAccess';
-import { FleetEvents } from './services/eventBus';
 import { centralizedFleetDataService, useFleetData, UnifiedVehicleData } from './services/centralizedFleetDataService';
 import { fleetStorageAdapter, type FleetVehicleInput } from './services/fleetStorageAdapter';
 import { useFleetState, type FleetStatusFilter } from './hooks/useFleetState';
-import { isFleetAdapterEnabled, isFleetHookEnabled } from './utils/featureFlags';
+import { useOnboardingFlow } from './hooks/useOnboardingFlow';
+import { isFleetHookEnabled } from './utils/featureFlags';
+import { createDatabaseService } from './services/databaseService';
+import { logger } from './services/logger';
 
 // Types and interfaces are now imported from ./types
 
 type FleetStatusViewFilter = FleetStatusFilter | 'maintenance' | 'expires_soon' | 'review_needed';
 
-// FleetDataManager is now imported from ./services/fleetDataManager
-
 // Utility functions are now imported from ./utils
 
 // Enhanced Onboarding Component with API Integration
-import { dataInputService, EnhancedVehicleData, ManualEntryTemplate } from './services/dataInputService';
 import { BulkFileUpload, ManualDataEntry, DataSourceIndicator } from './components/DataInputComponents';
 import { ComprehensiveComplianceDashboard } from './components/ComprehensiveComplianceDashboard';
 import ErrorHandlingTestPage from './pages/ErrorHandlingTestPage';
 
 // OnboardingPageProps and OnboardingMethod are now imported from ./types
 
-const OnboardingPage: React.FC<OnboardingPageProps> = ({ setCurrentPage }) => {
-  const [step, setStep] = useState(1);
-  const [onboardingMethod, setOnboardingMethod] = useState<OnboardingMethod>('document_processing');
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [parsedVINs, setParsedVINs] = useState<ParsedVIN[]>([]);
-  const [enhancedVehicleData, setEnhancedVehicleData] = useState<EnhancedVehicleData[]>([]);
-  const [processingProgress, setProcessingProgress] = useState(0);
-  const [processingStatus, setProcessingStatus] = useState('');
+type ComplianceWarningLevel = 'none' | 'low' | 'medium' | 'high' | 'critical';
+type ComplianceItemStatus = 'current' | 'expires_soon' | 'expired' | 'missing';
+
+interface ComplianceAlertItem {
+  vehicleId: string;
+  vin: string;
+  licensePlate: string;
+  truckNumber: string;
+  make: string;
+  model: string;
+  year: number;
+  status: 'active' | 'inactive' | 'maintenance';
+  complianceType: 'registration' | 'insurance' | 'inspection' | 'emissions';
+  currentStatus: ComplianceItemStatus;
+  expirationDate?: string;
+  daysUntilExpiration?: number;
+  issuer?: string;
+  policyNumber?: string;
+  certificateNumber?: string;
+  lastChecked: string;
+  nextCheckDue?: string;
+  warningLevel: ComplianceWarningLevel;
+}
+
+const complianceTypeLabels: Record<ComplianceAlertItem['complianceType'], string> = {
+  registration: 'Registration',
+  insurance: 'Insurance',
+  inspection: 'Inspection',
+  emissions: 'Emissions'
+};
+
+const warningLevelPriorityMap: Record<ComplianceWarningLevel, ComplianceTask['priority']> = {
+  critical: 'critical',
+  high: 'high',
+  medium: 'medium',
+  low: 'low',
+  none: 'low'
+};
+
+const mapComplianceItemToTask = (item: ComplianceAlertItem): ComplianceTask | null => {
+  if (item.currentStatus === 'current') {
+    return null;
+  }
+
+  let daysUntilDue: number | null =
+    typeof item.daysUntilExpiration === 'number' && Number.isFinite(item.daysUntilExpiration)
+      ? item.daysUntilExpiration
+      : null;
+
+  const candidateDate = item.expirationDate || item.nextCheckDue;
+  let dueDateIso = '';
+  if (!daysUntilDue && candidateDate) {
+    const parsed = new Date(candidateDate);
+    if (!Number.isNaN(parsed.getTime())) {
+      daysUntilDue = Math.ceil((parsed.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+      dueDateIso = parsed.toISOString();
+    }
+  } else if (candidateDate) {
+    const parsed = new Date(candidateDate);
+    if (!Number.isNaN(parsed.getTime())) {
+      dueDateIso = parsed.toISOString();
+    }
+  }
+
+  let status: ComplianceTask['status'];
+  if (item.currentStatus === 'expired' || (daysUntilDue != null && daysUntilDue < 0)) {
+    status = 'overdue';
+  } else if (item.currentStatus === 'expires_soon' || item.currentStatus === 'missing') {
+    status = 'pending';
+  } else {
+    status = 'in_progress';
+  }
+
+  const normalizedDays = typeof daysUntilDue === 'number' && Number.isFinite(daysUntilDue) ? daysUntilDue : 0;
+  const priority = warningLevelPriorityMap[item.warningLevel] ?? 'medium';
+  const label = complianceTypeLabels[item.complianceType] ?? 'Compliance';
+  const vehicleName =
+    [item.make, item.model].filter(Boolean).join(' ').trim() || item.licensePlate || 'Unknown Vehicle';
+
+  return {
+    id: `${item.vehicleId || item.vin}-${item.complianceType}`,
+    vehicleId: item.vehicleId || item.vin,
+    vehicleVin: item.vin || 'UNKNOWN',
+    vehicleName,
+    title: `${label} ${status === 'overdue' ? 'Expired' : 'Action Required'}`,
+    description: `Review ${label.toLowerCase()} records for ${vehicleName}.`,
+    category: item.complianceType,
+    priority,
+    status,
+    dueDate: dueDateIso,
+    daysUntilDue: normalizedDays,
+    assignedTo: 'Compliance Team',
+    estimatedCost: undefined,
+    jurisdiction: item.issuer || 'N/A',
+    documentationRequired: true,
+    requiredDocuments: [label],
+    uploadedDocuments: [],
+    filingUrl: undefined,
+    createdDate: item.lastChecked || new Date().toISOString(),
+    updatedDate: item.lastChecked || new Date().toISOString(),
+    completedDate: undefined
+  };
+};
+
+const computeComplianceStats = (tasks: ComplianceTask[]): ComplianceStats => {
+  return tasks.reduce<ComplianceStats>(
+    (acc, task) => {
+      acc.total += 1;
+      switch (task.status) {
+        case 'pending':
+          acc.pending += 1;
+          break;
+        case 'in_progress':
+          acc.inProgress += 1;
+          break;
+        case 'completed':
+          acc.completed += 1;
+          break;
+        case 'overdue':
+          acc.overdue += 1;
+          break;
+        default:
+          break;
+      }
+
+      if (task.priority === 'critical') {
+        acc.critical += 1;
+      }
+      if (task.priority === 'high') {
+        acc.high += 1;
+      }
+
+      return acc;
+    },
+    {
+      total: 0,
+      pending: 0,
+      inProgress: 0,
+      completed: 0,
+      overdue: 0,
+      critical: 0,
+      high: 0
+    }
+  );
+};
+
+type AppPage =
+  | 'dashboard'
+  | 'onboarding'
+  | 'fleet'
+  | 'drivers'
+  | 'compliance'
+  | 'comprehensive-compliance'
+  | 'reports'
+  | 'error-testing';
+
+type NavIconProps = React.SVGProps<SVGSVGElement>;
+
+interface NavItem {
+  id: AppPage;
+  label: string;
+  description: string;
+  icon: React.ComponentType<NavIconProps>;
+}
+
+const iconBaseClass = 'h-5 w-5';
+const withIconClass = (className?: string) => (className ? `${iconBaseClass} ${className}` : iconBaseClass);
+
+const IconDashboard = ({ className, ...props }: NavIconProps) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className={withIconClass(className)} {...props}>
+    <rect x="3.5" y="3.5" width="8" height="8" rx="2" strokeWidth="1.4" />
+    <rect x="13.5" y="3.5" width="7" height="5.5" rx="1.8" strokeWidth="1.4" />
+    <rect x="3.5" y="13.5" width="8" height="7" rx="1.8" strokeWidth="1.4" />
+    <rect x="13.5" y="10.5" width="7" height="10" rx="1.8" strokeWidth="1.4" />
+  </svg>
+);
+
+const IconOnboarding = ({ className, ...props }: NavIconProps) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className={withIconClass(className)} {...props}>
+    <path d="M4.5 11 12 4.5 19.5 11" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M12 4.5v15" strokeWidth="1.4" strokeLinecap="round" />
+    <path d="M7 15.5h10" strokeWidth="1.4" strokeLinecap="round" />
+  </svg>
+);
+
+const IconFleet = ({ className, ...props }: NavIconProps) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className={withIconClass(className)} {...props}>
+    <path d="M4 17.5h16" strokeWidth="1.5" strokeLinecap="round" />
+    <path
+      d="M6.5 7l3.2 4.3 3.6-4.8 4.7 6"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <circle cx="7" cy="19.5" r="1.2" strokeWidth="1.3" />
+    <circle cx="17" cy="19.5" r="1.2" strokeWidth="1.3" />
+  </svg>
+);
+
+const IconDrivers = ({ className, ...props }: NavIconProps) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className={withIconClass(className)} {...props}>
+    <circle cx="12" cy="8.8" r="3.4" strokeWidth="1.4" />
+    <path
+      d="M5.5 19.5c1.4-3.1 4.1-5 6.5-5s5.1 1.9 6.5 5"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const IconCompliance = ({ className, ...props }: NavIconProps) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className={withIconClass(className)} {...props}>
+    <path
+      d="M12 3.5 19 6v5.3c0 5-3 7.7-7 9.4-4-1.7-7-4.5-7-9.4V6z"
+      strokeWidth="1.4"
+      strokeLinejoin="round"
+    />
+    <path d="M9.5 12.3 11.7 14.5 15.8 9.7" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+const IconRealtime = ({ className, ...props }: NavIconProps) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className={withIconClass(className)} {...props}>
+    <circle cx="12" cy="12" r="8" strokeWidth="1.4" />
+    <circle cx="12" cy="12" r="4.3" strokeWidth="1.4" opacity="0.6" />
+    <path d="M12 7v5l3 2" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+const IconReports = ({ className, ...props }: NavIconProps) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className={withIconClass(className)} {...props}>
+    <path d="M6 18V8.5" strokeWidth="1.5" strokeLinecap="round" />
+    <path d="M10.5 18V5.5" strokeWidth="1.5" strokeLinecap="round" />
+    <path d="M15 18V10.5" strokeWidth="1.5" strokeLinecap="round" />
+    <path d="M19.5 18V12" strokeWidth="1.5" strokeLinecap="round" />
+  </svg>
+);
+
+const IconLab = ({ className, ...props }: NavIconProps) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className={withIconClass(className)} {...props}>
+    <path d="M9 4.5h6" strokeWidth="1.4" strokeLinecap="round" />
+    <path d="M10 4.5V12L5.8 19.5h12.4L14 12V4.5" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M7.5 16h9" strokeWidth="1.2" strokeLinecap="round" opacity="0.7" />
+  </svg>
+);
+
+const useComplianceData = () => {
+  const [tasks, setTasks] = useState<ComplianceTask[]>([]);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // const [currentVinIndex, setCurrentVinIndex] = useState(0); // Unused for now
-  const [manualEntryData, setManualEntryData] = useState<{
-    vin: string;
-    template: ManualEntryTemplate;
-    existingData?: EnhancedVehicleData;
-  } | null>(null);
-  
-  // Document processing states
-  const [isDocumentUploadOpen, setIsDocumentUploadOpen] = useState(false);
-  
-  const handleDocumentProcessingComplete = async (vehicleData: ExtractedVehicleData[]) => {
-    console.log('📄 OnboardingPage: Document processing complete', vehicleData);
-    
-    // Convert document processing results to enhanced vehicle data format for onboarding review
-    const convertedData: EnhancedVehicleData[] = vehicleData.map(vehicle => ({
-      vin: vehicle.vin || 'UNKNOWN',
-      year: vehicle.year || new Date().getFullYear(),
-      make: vehicle.make || 'Unknown',
-      model: vehicle.model || 'Unknown',
-      fuelType: 'Diesel', // Default
-      maxWeight: 80000, // Default
-      vehicleClass: 'Class 8', // Default
-      status: 'success' as const,
-      complianceTasks: 0,
-      dotNumber: vehicle.dotNumber || '', // Use extracted DOT number
-      licensePlate: vehicle.licensePlate || '',
-      truckNumber: vehicle.truckNumber || `Vehicle ${vehicle.vin?.slice(-4) || 'Unknown'}`,
-      registrationExpirationDate: vehicle.registrationExpirationDate,
-      insuranceExpirationDate: vehicle.insuranceExpirationDate,
-      insuranceCarrier: vehicle.insuranceCarrier,
-      policyNumber: vehicle.policyNumber,
-      registrationNumber: vehicle.registrationNumber,
-      registrationState: vehicle.registrationState,
-      dataSource: {
-        method: 'file' as const,
-        confidence: 'high' as const,
-        lastUpdated: new Date().toISOString(),
-        source: 'AI Document Processing'
-      },
-      missingFields: [],
-      needsReview: vehicle.needsReview || false
-    }));
-    
-    console.log('📄 OnboardingPage: Using centralized service to add vehicles');
-    
+  const databaseRef = useRef<ReturnType<typeof createDatabaseService> | null>(null);
+
+  const fetchCompliance = useCallback(async () => {
+    setLoading(true);
     try {
-      // Use centralized service for atomic operation
-      const result = await centralizedFleetDataService.addVehicles(vehicleData);
-      
-      if (result.success) {
-        console.log(`✅ OnboardingPage: Successfully processed ${result.processed} vehicles via centralized service`);
-      } else {
-        console.error('❌ OnboardingPage: Document processing failed:', result.errors);
-      }
-      
-    } catch (error) {
-      console.error('❌ OnboardingPage: Error using centralized service:', error);
-    }
-    
-    // Set local state for onboarding review
-    setEnhancedVehicleData(convertedData);
-    setStep(3); // Move to review step (step 3 is "Review Vehicle Data")
-  };
-
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    setError(null);
-    setUploadedFile(file);
-
-    if (!file.name.endsWith('.csv') && !file.name.endsWith('.txt')) {
-      setError('Please upload a CSV or TXT file');
-      return;
-    }
-
-    if (file.size > 5 * 1024 * 1024) {
-      setError('File size must be less than 5MB');
-      return;
-    }
-
-    try {
-      setIsProcessing(true);
-      const parsed = await parseCSVFile(file);
-      setParsedVINs(parsed);
-      setIsProcessing(false);
-    } catch (error) {
-      setError('Failed to parse CSV file. Please check the format.');
-      setIsProcessing(false);
-    }
-  };
-
-  const startProcessing = async () => {
-    const validVINs = parsedVINs.filter(v => v.isValid);
-    if (validVINs.length === 0) {
-      setError('No valid VINs found in the file');
-      return;
-    }
-
-    setStep(2);
-    setIsProcessing(true);
-    setProcessingProgress(0);
-
-    const processed: EnhancedVehicleData[] = [];
-
-    for (let i = 0; i < validVINs.length; i++) {
-      const vin = validVINs[i].vin;
-      
-      const progress = Math.round(((i + 1) / validVINs.length) * 90);
-      setProcessingStatus(`Processing VIN ${i + 1} of ${validVINs.length}: ${vin}`);
-      setProcessingProgress(progress);
-
-      try {
-        // Try API first, then provide fallback options
-        const result = await dataInputService.getVehicleData(vin, { 
-          allowPartial: true 
-        });
-
-        if (result.data) {
-          processed.push(result.data);
-        } else {
-          // Create incomplete entry that will need manual input
-          processed.push({
-            vin,
-            dataSource: {
-              method: 'incomplete',
-              confidence: 'low',
-              lastUpdated: new Date().toISOString(),
-              source: 'API Failed - Needs Manual Entry'
-            },
-            missingFields: ['make', 'model', 'year'],
-            needsReview: true
-          });
-        }
-      } catch (error) {
-        console.error(`Failed to process VIN ${vin}:`, error);
-        processed.push({
-          vin,
-          dataSource: {
-            method: 'incomplete',
-            confidence: 'low',
-            lastUpdated: new Date().toISOString(),
-            source: 'Processing Failed - Needs Manual Entry'
-          },
-          missingFields: ['make', 'model', 'year'],
-          needsReview: true
-        });
+      if (!databaseRef.current) {
+        databaseRef.current = createDatabaseService();
       }
 
-      // Small delay to show progress
-      await new Promise(resolve => setTimeout(resolve, 300));
+      const response = await databaseRef.current.getActiveAlertsByOrganization();
+      const responseData = (response as any)?.data ?? response;
+      const items = Array.isArray(responseData) ? (responseData as ComplianceAlertItem[]) : [];
+      const mapped = items
+        .map(mapComplianceItemToTask)
+        .filter((task): task is ComplianceTask => Boolean(task));
+
+      setTasks(mapped);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load compliance alerts');
+    } finally {
+      setLoading(false);
     }
+  }, []);
 
-    setProcessingStatus('Finalizing vehicle profiles...');
-    setProcessingProgress(100);
-    await new Promise(resolve => setTimeout(resolve, 500));
+  useEffect(() => {
+    void fetchCompliance();
+  }, [fetchCompliance]);
 
-    setEnhancedVehicleData(processed);
-    setIsProcessing(false);
-    setStep(3);
+  const stats = useMemo(() => computeComplianceStats(tasks), [tasks]);
+
+  const updateTaskStatus = useCallback((taskId: string, newStatus: ComplianceTask['status']) => {
+    setTasks((prev) =>
+      prev.map((task) =>
+        task.id === taskId
+          ? {
+              ...task,
+              status: newStatus,
+              documentationRequired: newStatus !== 'completed',
+              updatedDate: new Date().toISOString(),
+              completedDate: newStatus === 'completed' ? new Date().toISOString() : task.completedDate
+            }
+          : task
+      )
+    );
+  }, []);
+
+  return {
+    tasks,
+    stats,
+    loading,
+    error,
+    refresh: fetchCompliance,
+    updateTaskStatus
   };
+};
 
-  const handleBulkFileUpload = (uploadedData: EnhancedVehicleData[]) => {
-    setEnhancedVehicleData(uploadedData);
-    setStep(3); // Go directly to review
-  };
+const OnboardingPage: React.FC<OnboardingPageProps> = ({ setCurrentPage }) => {
+  const {
+    step,
+    onboardingMethod,
+    uploadedFile,
+    isProcessing,
+    parsedVINs,
+    enhancedVehicleData,
+    processingProgress,
+    processingStatus,
+    error,
+    manualEntryData,
+    isDocumentUploadOpen,
+    jobSnapshots,
+    setOnboardingMethod,
+    setError,
+    goToStep,
+    handleFileUpload,
+    startVinProcessing,
+    handleBulkFileUpload,
+    handleManualEntrySubmit,
+    handleEditVehicle,
+    prepareManualEntryFromVin,
+    handleDocumentProcessingComplete,
+    openDocumentUploadModal,
+    closeDocumentUploadModal,
+    completeOnboarding,
+    resetOnboarding,
+    cancelManualEntry
+  } = useOnboardingFlow();
 
-  const handleManualEntrySubmit = (vehicleData: EnhancedVehicleData) => {
-    if (manualEntryData) {
-      // Update existing data
-      setEnhancedVehicleData(prev => 
-        prev.map(v => v.vin === vehicleData.vin ? vehicleData : v)
-      );
-    } else {
-      // Add new data
-      setEnhancedVehicleData(prev => [...prev, vehicleData]);
+  const readyVehicles = enhancedVehicleData.filter((vehicle) => vehicle.make && vehicle.model && vehicle.year);
+  const pendingVehicles = enhancedVehicleData.length - readyVehicles.length;
+  const parsedVinCount = parsedVINs.length;
+
+  const steps = [
+    { id: 1, title: 'Source', detail: 'Select ingest channel' },
+    { id: 2, title: 'Normalize', detail: 'Parse VINs & OCR docs' },
+    { id: 3, title: 'Review', detail: 'Inspect enriched data' },
+    { id: 4, title: 'Sync', detail: 'Push to fleet + compliance' },
+    { id: 5, title: 'Manual', detail: 'Resolve any gaps' }
+  ];
+
+  const methodOptions: Array<{
+    value: OnboardingMethod;
+    title: string;
+    description: string;
+    badge: string;
+    actionLabel: string;
+    action?: () => void;
+  }> = [
+    {
+      value: 'document_processing',
+      title: 'AI Document Intake',
+      description: 'Drop registrations, insurance packets, inspections, or driver folders. We OCR, cross-check, and enrich.',
+      badge: 'OCR + reconcile',
+      actionLabel: 'Launch intake',
+      action: openDocumentUploadModal
+    },
+    {
+      value: 'bulk_upload',
+      title: 'CSV / XLSX Upload',
+      description: 'High-volume VIN manifests with structured metadata. Template enforced for zero-miss imports.',
+      badge: 'Template ready',
+      actionLabel: 'Download template',
+      action: downloadSampleCSV
+    },
+    {
+      value: 'manual_entry',
+      title: 'Manual Entry',
+      description: 'Guided UI for edge cases or rapid single vehicle additions using pre-built templates.',
+      badge: 'Precision edit',
+      actionLabel: 'Launch form',
+      action: () => goToStep(5)
     }
-    setManualEntryData(null);
-    setStep(3);
-  };
+  ];
 
-  const handleEditVehicle = async (vin: string) => {
-    const existingData = enhancedVehicleData.find(v => v.vin === vin);
-    const result = await dataInputService.getVehicleData(vin, { skipApi: true });
-    
-    setManualEntryData({
-      vin,
-      template: result.fallbackOptions.template!,
-      existingData
-    });
-    setStep(5); // Manual entry step
-  };
-
-  const completeOnboarding = async () => {
-    const adapterEnabled = isFleetAdapterEnabled();
-
-    const persistentVehicles = enhancedVehicleData
-      .filter(v => v.make && v.model && v.year)
-      .map(v => ({
-        vin: v.vin,
-        make: v.make!,
-        model: v.model!,
-        year: v.year!,
-        licensePlate: `${v.make?.slice(0,3).toUpperCase()}${Math.floor(Math.random() * 1000)}`,
-        dotNumber: undefined,
-        truckNumber: v.truckNumber || '',
-        status: 'active' as const
-      }));
-
-    if (persistentVehicles.length === 0) {
-      setError('No valid vehicles to add.');
-      return;
-    }
-
-    try {
-      const result = await fleetStorageAdapter.addVehicles(persistentVehicles as FleetVehicleInput[]);
-      if (!result.success) {
-        setError('Unable to add some vehicles. Please review and try again.');
-        return;
-      }
-
-      if (!adapterEnabled) {
-        const legacyVehicles = enhancedVehicleData
-          .filter(v => v.make && v.model && v.year)
-          .map(v => ({
-            vin: v.vin,
-            year: v.year!,
-            make: v.make!,
-            model: v.model!,
-            fuelType: v.fuelType || 'Diesel',
-            maxWeight: v.maxWeight || 80000,
-            vehicleClass: v.vehicleClass || 'Class 8',
-            status: 'success' as const,
-            complianceTasks: 3
-          }));
-
-        fleetDataManager.addVehicles(legacyVehicles);
-      }
-
-      setStep(4);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'Failed to complete onboarding');
-    }
-  };
-
-  const resetOnboarding = () => {
-    setStep(1);
-    setOnboardingMethod('vin_list');
-    setUploadedFile(null);
-    setParsedVINs([]);
-    setEnhancedVehicleData([]);
-    setProcessingProgress(0);
-    setProcessingStatus('');
-    setError(null);
-    setIsProcessing(false);
-    // setCurrentVinIndex(0);
-    setManualEntryData(null);
-  };
+  const renderVehicleCard = (vehicle: typeof enhancedVehicleData[number]) => (
+    <div key={`${vehicle.vin}-${vehicle.truckNumber}`} className="rounded-2xl border border-white/10 bg-black/40 p-5 space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="font-display text-lg text-white">{vehicle.truckNumber || vehicle.vin}</p>
+          <p className="text-sm text-white/60">{vehicle.year} / {vehicle.make} / {vehicle.model}</p>
+          <p className="text-xs text-white/50">VIN: <span className="font-mono">{vehicle.vin}</span></p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => handleEditVehicle(vehicle.vin)}
+            className="data-chip bg-white/10 text-white/80"
+          >
+            Edit
+          </button>
+          <button
+            onClick={() => prepareManualEntryFromVin(vehicle.vin)}
+            className="data-chip bg-white/5 text-white/60"
+          >
+            Manual
+          </button>
+        </div>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="text-xs text-white/60 space-y-1">
+          <p>Plate: {vehicle.licensePlate || 'Pending'}</p>
+          <p>DOT: {vehicle.dotNumber || '--'}</p>
+          <p>Compliance tasks: {vehicle.complianceTasks ?? 0}</p>
+        </div>
+        <DataSourceIndicator data={vehicle} />
+      </div>
+    </div>
+  );
 
   return (
-    <div className="max-w-6xl">
-      {/* Modern Header */}
-      <div className="bg-gradient-to-r from-blue-600 to-indigo-700 rounded-xl p-8 mb-8 text-white">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-2xl md:text-4xl font-bold mb-2">🚛 Fleet Onboarding</h2>
-            <p className="text-blue-100 text-sm md:text-lg">Add your trucks to TruckBo for automated compliance management</p>
-          </div>
-          <div className="text-right">
-            <div className="text-3xl font-bold">{enhancedVehicleData.length}</div>
-            <div className="text-blue-200">Vehicles Added</div>
+    <div className="space-y-10">
+      <section className="neo-panel grid gap-8 p-8 text-white lg:grid-cols-[1.2fr_0.8fr]">
+        <div className="space-y-4">
+          <p className="text-xs uppercase tracking-[0.5em] text-white/60">Fleet ingest</p>
+          <h2 className="font-display text-3xl md:text-4xl">Precision Onboarding Console</h2>
+          <p className="text-sm text-white/70">
+            Normalize VIN manifests, OCR document archives, and ship enriched fleet data directly into TruckBo's centralized brain.
+          </p>
+          <div className="flex flex-wrap gap-3 text-xs text-white/70">
+            <span className="data-chip">Step {step} of 5</span>
+            <span className="data-chip">{jobSnapshots.length} document batches</span>
+            <span className="data-chip">{parsedVinCount} VINs parsed</span>
           </div>
         </div>
-      </div>
+        <div className="grid gap-4 rounded-2xl border border-white/10 bg-white/5/10 p-6 text-center">
+          <p className="text-xs uppercase tracking-[0.4em] text-white/60">Vehicles captured</p>
+          <p className="font-display text-5xl">{enhancedVehicleData.length}</p>
+          <p className="text-sm text-white/60">{readyVehicles.length} ready � {pendingVehicles} pending data</p>
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={() => setCurrentPage('fleet')}
+              className="pressable rounded-2xl border border-white/20 bg-white/10 px-4 py-2 text-xs uppercase tracking-[0.4em] text-white"
+            >
+              View Fleet
+            </button>
+            <button
+              onClick={() => setCurrentPage('compliance')}
+              className="pressable rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.4em] text-white/80"
+            >
+              Compliance
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="neo-panel p-6">
+        <div className="flex flex-wrap gap-4">
+          {steps.map((entry) => {
+            const isActive = step === entry.id;
+            const isComplete = step > entry.id;
+            return (
+              <button
+                key={entry.id}
+                onClick={() => goToStep(entry.id)}
+                className={`flex-1 min-w-[140px] rounded-2xl border px-4 py-3 text-left ${
+                  isActive ? 'border-white/40 bg-white/10' : isComplete ? 'border-white/20 bg-white/5 text-white/70' : 'border-white/10 text-white/50'
+                }`}
+              >
+                <p className="text-xs uppercase tracking-[0.3em]">{`0${entry.id}`}</p>
+                <p className="font-display text-lg text-white">{entry.title}</p>
+                <p className="text-xs text-white/60">{entry.detail}</p>
+              </button>
+            );
+          })}
+        </div>
+      </section>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-6 mb-6 shadow-sm">
-          <div className="flex items-start">
-            <div className="flex-shrink-0">
-              <div className="w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center">
-                <span className="text-red-600 text-xl">⚠️</span>
-              </div>
+        <section className="neo-panel border border-red-500/30 bg-red-950/40 p-6 text-red-100">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="font-display text-lg">Processing issue</p>
+              <p className="text-sm text-red-100/80">{error}</p>
             </div>
-            <div className="ml-4 flex-1">
-              <h4 className="font-semibold text-red-800 mb-1">Processing Error</h4>
-              <p className="text-red-700">{error}</p>
-            </div>
-            <button
-              onClick={() => setError(null)}
-              className="flex-shrink-0 text-red-400 hover:text-red-600 transition-colors duration-200"
-            >
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-              </svg>
+            <button onClick={() => setError(null)} className="data-chip border-red-400/40 text-red-100">
+              Dismiss
             </button>
           </div>
-        </div>
+        </section>
       )}
 
-      {/* Modern Progress Steps */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-8">
-        <div className="flex items-center justify-between">
-          {[
-            { num: 1, label: 'Input Method', icon: '📋' },
-            { num: 2, label: 'Data Processing', icon: '⚙️' },
-            { num: 3, label: 'Vehicle Review', icon: '🔍' },
-            { num: 4, label: 'Fleet Ready', icon: '✅' }
-          ].map(({ num, label, icon }, index) => (
-            <div key={num} className="flex items-center flex-1">
-              <div className={`flex items-center justify-center w-12 h-12 rounded-full border-2 ${
-                step >= num 
-                  ? 'bg-blue-600 border-blue-600 text-white' 
-                  : 'bg-white border-gray-300 text-gray-400'
-              }`}>
-                <span className="text-lg">{step >= num ? '✓' : icon}</span>
-              </div>
-              <div className={`ml-3 ${step >= num ? 'text-blue-600' : 'text-gray-500'}`}>
-                <div className="font-semibold text-sm">Step {num}</div>
-                <div className="text-xs">{label}</div>
-              </div>
-              {index < 3 && (
-                <div className={`flex-1 h-0.5 mx-4 ${
-                  step > num ? 'bg-blue-600' : 'bg-gray-200'
-                }`} />
-              )}
+      {jobSnapshots.length > 0 && (
+        <section className="neo-panel p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.35em] text-white/50">Document jobs</p>
+              <h3 className="font-display text-2xl text-white">AI intake timeline</h3>
             </div>
-          ))}
-        </div>
-      </div>
-
-      {step === 1 && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
-          <div className="text-center mb-8">
-            <h3 className="text-xl md:text-3xl font-bold text-gray-900 mb-3">Add Your Fleet</h3>
-            <p className="text-gray-600 text-sm md:text-lg">Choose the best method to get your trucks into TruckBo</p>
+            <span className="data-chip text-white/60">{jobSnapshots.length} batches</span>
           </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            {/* AI Document Processing - Primary Recommendation */}
-            <div
-              className={`group relative border-2 rounded-xl p-8 cursor-pointer transition-all duration-300 ${
-                onboardingMethod === 'document_processing'
-                  ? 'border-purple-500 bg-gradient-to-br from-purple-50 to-indigo-50 shadow-lg scale-105'
-                  : 'border-gray-200 hover:border-purple-300 hover:shadow-md hover:scale-102'
-              }`}
-              onClick={() => setOnboardingMethod('document_processing')}
-            >
-              <div className="text-center">
-                <div className="w-16 h-16 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-xl flex items-center justify-center text-white text-3xl font-bold mb-4 mx-auto group-hover:scale-110 transition-transform duration-300">
-                  🤖
+          <div className="space-y-4">
+            {jobSnapshots.map((job) => (
+              <div key={job.jobId} className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white/70">
+                <div>
+                  <p className="font-display text-base text-white">{job.originalFilename || job.jobId}</p>
+                  <p className="text-xs text-white/50">Updated {job.updatedAt ? new Date(job.updatedAt).toLocaleString() : '�'}</p>
                 </div>
-                <div className="flex items-center justify-center mb-2">
-                  <h4 className="font-bold text-xl text-gray-900">AI Document Processing</h4>
-                  <span className="ml-2 text-xs bg-purple-100 text-purple-800 px-2 py-1 rounded-full font-medium">
-                    ⭐ RECOMMENDED
-                  </span>
-                </div>
-                <p className="text-gray-600 leading-relaxed">
-                  Upload registration and insurance documents. Our AI extracts all vehicle information and tracks compliance expiry dates automatically.
-                </p>
-                <div className="mt-6 text-sm text-purple-600 font-medium">
-                  ✓ Complete automation   ✓ Compliance tracking   ✓ Document analysis
+                <div className="flex gap-3 text-xs text-white/60">
+                  <span className="data-chip">Status: {job.status}</span>
+                  {job.databaseDocumentId && <span className="data-chip">Doc #{job.databaseDocumentId}</span>}
+                  {job.databaseError && <span className="data-chip text-red-200">{job.databaseError}</span>}
                 </div>
               </div>
-              {onboardingMethod === 'document_processing' && (
-                <div className="absolute top-4 right-4 w-6 h-6 bg-purple-600 rounded-full flex items-center justify-center">
-                  <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                  </svg>
-                </div>
-              )}
-            </div>
-            
-            <div
-              className={`group relative border-2 rounded-xl p-8 cursor-pointer transition-all duration-300 ${
-                onboardingMethod === 'vin_list'
-                  ? 'border-blue-500 bg-gradient-to-br from-blue-50 to-indigo-50 shadow-lg scale-105'
-                  : 'border-gray-200 hover:border-blue-300 hover:shadow-md hover:scale-102'
-              }`}
-              onClick={() => setOnboardingMethod('vin_list')}
-            >
-              <div className="text-center">
-                <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center text-white text-2xl font-bold mb-4 mx-auto group-hover:scale-110 transition-transform duration-300">
-                  VIN
-                </div>
-                <h4 className="font-bold text-xl mb-3 text-gray-900">VIN List Processing</h4>
-                <p className="text-gray-600 leading-relaxed">
-                  Upload VINs and we'll automatically fetch truck specifications and compliance requirements from government databases.
-                </p>
-                <div className="mt-6 text-sm text-blue-600 font-medium">
-                  ✓ Automatic data lookup   ✓ API-powered   ✓ Fast processing
-                </div>
-              </div>
-              {onboardingMethod === 'vin_list' && (
-                <div className="absolute top-4 right-4 w-6 h-6 bg-blue-600 rounded-full flex items-center justify-center">
-                  <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                  </svg>
-                </div>
-              )}
-            </div>
-
-            <div
-              className={`group relative border-2 rounded-xl p-8 cursor-pointer transition-all duration-300 ${
-                onboardingMethod === 'bulk_upload'
-                  ? 'border-green-500 bg-gradient-to-br from-green-50 to-emerald-50 shadow-lg scale-105'
-                  : 'border-gray-200 hover:border-green-300 hover:shadow-md hover:scale-102'
-              }`}
-              onClick={() => setOnboardingMethod('bulk_upload')}
-            >
-              <div className="text-center">
-                <div className="w-16 h-16 bg-gradient-to-br from-green-500 to-emerald-600 rounded-xl flex items-center justify-center text-white text-2xl font-bold mb-4 mx-auto group-hover:scale-110 transition-transform duration-300">
-                  CSV
-                </div>
-                <h4 className="font-bold text-xl mb-3 text-gray-900">Complete Fleet Upload</h4>
-                <p className="text-gray-600 leading-relaxed">
-                  Upload a pre-filled spreadsheet with all your truck details including make, model, year, and compliance information.
-                </p>
-                <div className="mt-6 text-sm text-green-600 font-medium">
-                  ✓ Bulk processing   ✓ Pre-filled data   ✓ Quick setup
-                </div>
-              </div>
-              {onboardingMethod === 'bulk_upload' && (
-                <div className="absolute top-4 right-4 w-6 h-6 bg-green-600 rounded-full flex items-center justify-center">
-                  <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                  </svg>
-                </div>
-              )}
-            </div>
-
-            <div
-              className={`group relative border-2 rounded-xl p-8 cursor-pointer transition-all duration-300 ${
-                onboardingMethod === 'individual'
-                  ? 'border-purple-500 bg-gradient-to-br from-purple-50 to-violet-50 shadow-lg scale-105'
-                  : 'border-gray-200 hover:border-purple-300 hover:shadow-md hover:scale-102'
-              }`}
-              onClick={() => setOnboardingMethod('individual')}
-            >
-              <div className="text-center">
-                <div className="w-16 h-16 bg-gradient-to-br from-purple-500 to-violet-600 rounded-xl flex items-center justify-center text-white text-2xl mb-4 mx-auto group-hover:scale-110 transition-transform duration-300">
-                  🚛
-                </div>
-                <h4 className="font-bold text-xl mb-3 text-gray-900">One-by-One Entry</h4>
-                <p className="text-gray-600 leading-relaxed">
-                  Add trucks individually with guided forms. Perfect for smaller fleets or when you want full control over each entry.
-                </p>
-                <div className="mt-6 text-sm text-purple-600 font-medium">
-                  ✓ Step-by-step   ✓ Guided process   ✓ Full control
-                </div>
-              </div>
-              {onboardingMethod === 'individual' && (
-                <div className="absolute top-4 right-4 w-6 h-6 bg-purple-600 rounded-full flex items-center justify-center">
-                  <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                  </svg>
-                </div>
-              )}
-            </div>
+            ))}
           </div>
+        </section>
+      )}
 
-          {onboardingMethod === 'document_processing' && (
-            <div className="bg-gradient-to-br from-purple-50 to-indigo-50 rounded-xl p-8 border border-purple-200">
-              <div className="flex items-center mb-6">
-                <div className="w-12 h-12 bg-purple-600 rounded-lg flex items-center justify-center text-white font-bold text-xl mr-4">
-                  🤖
-                </div>
-                <div>
-                  <h4 className="text-xl font-bold text-gray-900">AI Document Processing</h4>
-                  <p className="text-purple-700">Upload registration and insurance documents for complete automated setup</p>
-                </div>
-              </div>
-
-              <div className="text-center">
-                <button
-                  onClick={() => setIsDocumentUploadOpen(true)}
-                  className="px-8 py-4 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-xl font-black text-lg shadow-xl shadow-purple-900/20 hover:shadow-2xl hover:shadow-purple-900/30 transition-all duration-300 hover:scale-105 active:scale-95 border-2 border-purple-400"
-                >
-                  🤖 Start AI Document Processing
-                  <div className="text-xs font-normal text-purple-100 mt-1">
-                    ⭐ Upload folders or individual files
-                  </div>
-                </button>
-              </div>
-              
-              <div className="mt-6 bg-white/50 backdrop-blur-sm rounded-lg p-4">
-                <div className="flex items-center text-sm text-purple-700">
-                  <span className="text-purple-500 mr-2">💡</span>
-                  <span>Our AI will extract VINs, license plates, expiry dates, and insurance details automatically from your documents</span>
-                </div>
-              </div>
+      <section className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
+        <article className="neo-panel p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.35em] text-white/50">Ingest options</p>
+              <h3 className="font-display text-2xl text-white">Select data source</h3>
             </div>
-          )}
-
-          {onboardingMethod === 'vin_list' && (
-            <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-8 border border-blue-200">
-              <div className="flex items-center mb-6">
-                <div className="w-12 h-12 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-xl mr-4">
-                  📋
-                </div>
-                <div>
-                  <h4 className="text-xl font-bold text-gray-900">VIN List Upload</h4>
-                  <p className="text-blue-700">We'll automatically fetch truck data from government databases</p>
-                </div>
-              </div>
-
-              <div className="border-2 border-dashed border-blue-300 rounded-xl p-10 text-center mb-6 bg-white/50 backdrop-blur-sm hover:bg-white/70 transition-colors duration-300">
-                <div className="mb-6">
-                  <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl flex items-center justify-center text-white text-3xl font-bold mx-auto mb-4">
-                    📁
+            <span className="data-chip text-white/60">Current: {onboardingMethod}</span>
+          </div>
+          <div className="space-y-4">
+            {methodOptions.map((option) => {
+              const isActive = onboardingMethod === option.value;
+              return (
+                <div key={option.value} className={`rounded-2xl border p-4 ${isActive ? 'border-white/40 bg-white/10' : 'border-white/10 bg-white/5'}`}>
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="font-display text-lg text-white">{option.title}</p>
+                      <p className="text-sm text-white/70">{option.description}</p>
+                    </div>
+                    <span className="data-chip text-white/60">{option.badge}</span>
                   </div>
-                  <h5 className="text-lg font-semibold text-gray-900 mb-2">Drop your VIN file here</h5>
-                  <p className="text-gray-600">or click to browse your files</p>
-                </div>
-                
-                <input
-                  type="file"
-                  accept=".csv,.txt"
-                  onChange={handleFileUpload}
-                  className="w-full h-full opacity-0 absolute inset-0 cursor-pointer"
-                  disabled={isProcessing}
-                />
-                
-                <div className="space-y-2">
-                  <div className="flex items-center justify-center space-x-6 text-sm text-gray-500">
-                    <span className="flex items-center">
-                      <svg className="w-4 h-4 mr-1 text-green-500" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                      </svg>
-                      CSV & TXT files
-                    </span>
-                    <span className="flex items-center">
-                      <svg className="w-4 h-4 mr-1 text-green-500" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                      </svg>
-                      Max 5MB
-                    </span>
-                    <span className="flex items-center">
-                      <svg className="w-4 h-4 mr-1 text-green-500" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                      </svg>
-                      VINs in first column
-                    </span>
+                  <div className="mt-4 flex gap-3">
+                    <button
+                      onClick={() => setOnboardingMethod(option.value)}
+                      className={`rounded-xl border px-4 py-2 text-xs uppercase tracking-[0.3em] ${
+                        isActive ? 'border-white/40 bg-white/10 text-white' : 'border-white/20 text-white/70'
+                      }`}
+                    >
+                      {isActive ? 'Selected' : 'Use method'}
+                    </button>
+                    <button
+                      onClick={option.action}
+                      className="rounded-xl border border-white/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-white/70"
+                    >
+                      {option.actionLabel}
+                    </button>
                   </div>
                 </div>
-              </div>
+              );
+            })}
+          </div>
+        </article>
 
-              <div className="flex items-center justify-between bg-white rounded-lg p-4 border border-blue-200">
-                <div className="flex items-center">
-                  <div className="text-blue-600 mr-3">📄</div>
-                  <div>
-                    <p className="font-medium text-gray-900">Need a template?</p>
-                    <p className="text-sm text-gray-600">Download our VIN template to get started</p>
-                  </div>
-                </div>
-                <button
-                  onClick={downloadSampleCSV}
-                  className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-6 py-3 rounded-xl font-bold text-sm transition-all duration-300 flex items-center shadow-lg shadow-blue-900/20 hover:shadow-xl hover:shadow-blue-900/30 hover:scale-105 active:scale-95"
-                >
-                  <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
-                  </svg>
-                  Download Template
-                </button>
-              </div>
+        <article className="neo-panel p-6 space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.35em] text-white/50">Workspace</p>
+              <h3 className="font-display text-2xl text-white">Drop VIN manifest</h3>
             </div>
-          )}
-
-          {uploadedFile && parsedVINs.length > 0 && (
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 mt-6">
-              <div className="flex items-center mb-6">
-                <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center mr-3">
-                  <svg className="w-6 h-6 text-green-600" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                  </svg>
-                </div>
-                <div>
-                  <h4 className="text-xl font-bold text-gray-900">File Analysis Complete</h4>
-                  <p className="text-gray-600">Your VIN file has been processed and validated</p>
-                </div>
-              </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-6 border border-blue-200">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-sm font-medium text-blue-700 mb-1">Total VINs</div>
-                      <div className="text-3xl font-bold text-blue-900">{parsedVINs.length}</div>
-                    </div>
-                    <div className="w-12 h-12 bg-blue-600 rounded-lg flex items-center justify-center text-white text-xl">
-                      📊
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-xl p-6 border border-green-200">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-sm font-medium text-green-700 mb-1">Valid VINs</div>
-                      <div className="text-3xl font-bold text-green-900">{parsedVINs.filter(v => v.isValid).length}</div>
-                    </div>
-                    <div className="w-12 h-12 bg-green-600 rounded-lg flex items-center justify-center text-white text-xl">
-                      ✓
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="bg-gradient-to-br from-red-50 to-red-100 rounded-xl p-6 border border-red-200">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-sm font-medium text-red-700 mb-1">Invalid VINs</div>
-                      <div className="text-3xl font-bold text-red-900">{parsedVINs.filter(v => !v.isValid).length}</div>
-                    </div>
-                    <div className="w-12 h-12 bg-red-600 rounded-lg flex items-center justify-center text-white text-xl">
-                      ✕
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-gray-50 rounded-xl p-6">
-                <h5 className="font-bold text-gray-900 mb-4 flex items-center">
-                  <span className="mr-2">🔍</span>
-                  VIN Preview (showing first 5)
-                </h5>
-                <div className="space-y-3">
-                  {parsedVINs.slice(0, 5).map((vinData, index) => (
-                    <div key={index} className="flex items-center justify-between bg-white rounded-lg p-4 border border-gray-200">
-                      <div className="flex items-center">
-                        <div className="font-mono text-lg font-semibold text-gray-900 mr-4">
-                          {vinData.vin}
-                        </div>
-                      </div>
-                      <div className={`flex items-center px-3 py-1 rounded-full text-sm font-medium ${
-                        vinData.isValid 
-                          ? 'bg-green-100 text-green-800 border border-green-200' 
-                          : 'bg-red-100 text-red-800 border border-red-200'
-                      }`}>
-                        {vinData.isValid ? (
-                          <>
-                            <svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                            </svg>
-                            Valid VIN
-                          </>
-                        ) : (
-                          <>
-                            <svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                            </svg>
-                            Invalid VIN
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                  {parsedVINs.length > 5 && (
-                    <div className="text-center text-gray-500 text-sm py-2 bg-gray-100 rounded-lg">
-                      ... and {parsedVINs.length - 5} more VINs
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {parsedVINs.filter(v => v.isValid).length > 0 && (
-            <div className="mt-8 text-center">
+            <span className="data-chip text-white/60">CSV/TXT</span>
+          </div>
+          <label className={`flex flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-10 text-center transition ${
+            isProcessing ? 'border-emerald-400/50 bg-emerald-900/20 opacity-80' : 'border-white/15 hover:border-white/40'
+          }`}>
+            <input type="file" accept=".csv,.txt" onChange={handleFileUpload} className="hidden" />
+            <p className="font-display text-lg text-white">{uploadedFile ? uploadedFile.name : 'Drag & drop VIN manifests'}</p>
+            <p className="text-sm text-white/60">.csv or .txt � max 5MB</p>
+            {uploadedFile && (
               <button
-                onClick={startProcessing}
-                className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-12 py-4 rounded-xl font-bold text-lg shadow-lg hover:shadow-xl transition-all duration-300 flex items-center mx-auto"
+                onClick={startVinProcessing}
+                type="button"
+                className="mt-4 rounded-2xl border border-white/20 px-4 py-2 text-xs uppercase tracking-[0.3em] text-white"
               >
-                <svg className="w-6 h-6 mr-3" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
-                </svg>
-                Process {parsedVINs.filter(v => v.isValid).length} Valid VINs
+                Start processing
               </button>
-              <p className="text-gray-500 text-sm mt-3">
-                We'll automatically fetch truck data and generate compliance profiles
-              </p>
-            </div>
-          )}
-
+            )}
+          </label>
           {onboardingMethod === 'bulk_upload' && (
-            <div>
-              <BulkFileUpload
-                onDataProcessed={handleBulkFileUpload}
-                onError={setError}
-              />
+            <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+              <BulkFileUpload onDataProcessed={handleBulkFileUpload} onError={(message) => setError(message)} />
             </div>
           )}
+          {onboardingMethod === 'document_processing' && (
+            <div className="rounded-2xl border border-white/10 bg-black/30 p-5 text-sm text-white/70">
+              <p>Need to upload document packets instead? Launch the AI intake below.</p>
+              <button
+                onClick={openDocumentUploadModal}
+                className="mt-3 rounded-xl border border-white/30 px-4 py-2 text-xs uppercase tracking-[0.3em] text-white"
+              >
+                Start AI intake
+              </button>
+            </div>
+          )}
+        </article>
+      </section>
 
-          {onboardingMethod === 'individual' && (
+      {(isProcessing || parsedVinCount > 0) && (
+        <section className="neo-panel p-6">
+          <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
-              <h4 className="text-lg font-semibold mb-4">Add Individual Vehicle</h4>
-              <p className="text-gray-600 mb-6">Enter a VIN to start adding a vehicle with API assistance.</p>
-              
-              <div className="max-w-md">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Vehicle Identification Number (VIN)
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Enter 17-character VIN"
-                    maxLength={17}
-                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    onKeyUp={async (e) => {
-                      const vin = (e.target as HTMLInputElement).value.toUpperCase();
-                      if (vin.length === 17 && validateVIN(vin)) {
-                        const result = await dataInputService.getVehicleData(vin);
-                        setManualEntryData({
-                          vin,
-                          template: result.fallbackOptions.template!,
-                          existingData: result.data || undefined
-                        });
-                        setStep(5);
-                      }
-                    }}
-                  />
-                </div>
-                <p className="text-xs text-gray-500 mt-1">
-                  VIN will be validated and we'll try to fetch vehicle data automatically
-                </p>
-              </div>
+              <p className="text-xs uppercase tracking-[0.35em] text-white/50">Processing</p>
+              <h3 className="font-display text-2xl text-white">VIN normalization</h3>
             </div>
-          )}
-        </div>
+            <span className="data-chip text-white/60">{processingStatus || 'Idle'}</span>
+          </div>
+          <div className="mt-6 h-3 rounded-full bg-white/10">
+            <div className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-emerald-400" style={{ width: `${processingProgress}%` }} />
+          </div>
+          <p className="mt-3 text-sm text-white/60">{parsedVinCount} VINs parsed</p>
+        </section>
       )}
 
-      {step === 2 && (
-        <div>
-          <h3 className="text-2xl font-semibold mb-4">Processing VIN Data</h3>
-          <p className="text-gray-600 mb-6">Decoding vehicle information and generating compliance data...</p>
-
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 mb-6">
-            <div className="mb-4">
-              <div className="flex justify-between items-center mb-2">
-                <span className="text-yellow-800 font-medium">{processingStatus}</span>
-                <span className="text-yellow-700 text-sm">{processingProgress}%</span>
-              </div>
-              <div className="w-full bg-yellow-100 rounded-full h-3">
-                <div
-                  className="bg-yellow-600 h-3 rounded-full transition-all duration-500"
-                  style={{ width: `${processingProgress}%` }}
-                ></div>
-              </div>
+      {enhancedVehicleData.length > 0 && (
+        <section className="neo-panel p-6 space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.35em] text-white/50">Review & approve</p>
+              <h3 className="font-display text-2xl text-white">Enriched vehicles</h3>
             </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-              <div className={`flex items-center ${processingProgress >= 60 ? 'text-green-700' : 'text-yellow-700'}`}>
-                <span className="mr-2">{processingProgress >= 60 ? '✅' : '🔄'}</span>
-                VIN Decoding
-              </div>
-              <div className={`flex items-center ${processingProgress >= 80 ? 'text-green-700' : processingProgress >= 60 ?
-'text-yellow-700' : 'text-gray-500'}`}>
-                <span className="mr-2">{processingProgress >= 80 ? '✅' : processingProgress >= 60 ? '🔄' : '⏳'}</span>
-                Compliance Generation
-              </div>
-              <div className={`flex items-center ${processingProgress >= 100 ? 'text-green-700' : processingProgress >= 80 ?
-'text-yellow-700' : 'text-gray-500'}`}>
-                <span className="mr-2">{processingProgress >= 100 ? '✅' : processingProgress >= 80 ? '🔄' : '⏳'}</span>
-                Profile Creation
-              </div>
+            <div className="flex gap-3 text-xs text-white/70">
+              <span className="data-chip">Ready: {readyVehicles.length}</span>
+              <span className="data-chip">Pending: {pendingVehicles}</span>
             </div>
           </div>
-
-          {!isProcessing && processingProgress === 100 && (
-            <button
-              onClick={() => setStep(3)}
-              className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-medium"
-            >
-              View Results →
-            </button>
-          )}
-        </div>
-      )}
-
-      {step === 3 && (
-        <div>
-          <h3 className="text-2xl font-semibold mb-4">Review Vehicle Data</h3>
-          <p className="text-gray-600 mb-6">Review your vehicles and complete any missing information.</p>
-
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <div className="font-semibold text-blue-800">Total Vehicles</div>
-              <div className="text-2xl text-blue-600">{enhancedVehicleData.length}</div>
-            </div>
-            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-              <div className="font-semibold text-green-800">Complete</div>
-              <div className="text-2xl text-green-600">
-                {enhancedVehicleData.filter(v => v.make && v.model && v.year).length}
-              </div>
-            </div>
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-              <div className="font-semibold text-yellow-800">Need Review</div>
-              <div className="text-2xl text-yellow-600">
-                {enhancedVehicleData.filter(v => v.needsReview).length}
-              </div>
-            </div>
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-              <div className="font-semibold text-red-800">Incomplete</div>
-              <div className="text-2xl text-red-600">
-                {enhancedVehicleData.filter(v => !v.make || !v.model || !v.year).length}
-              </div>
-            </div>
+          <div className="grid gap-4">
+            {enhancedVehicleData.map((vehicle) => renderVehicleCard(vehicle))}
           </div>
-
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden mb-6">
-            <div className="px-6 py-4 bg-gray-50">
-              <h4 className="font-semibold">Vehicle Details</h4>
-            </div>
-            <div className="max-h-96 overflow-y-auto">
-              {enhancedVehicleData.map((vehicle, index) => (
-                <div key={index} className={`p-4 ${
-                  vehicle.needsReview ? 'border-l-4 border-l-yellow-500' : 
-                  (!vehicle.make || !vehicle.model || !vehicle.year) ? 'border-l-4 border-l-red-500' :
-                  'border-l-4 border-l-green-500'
-                }`}>
-                  <div className="flex justify-between items-start">
-                    <div className="flex-1">
-                      <h5 className="font-medium text-lg">
-                        {vehicle.year && vehicle.make && vehicle.model ? 
-                          `${vehicle.year} ${vehicle.make} ${vehicle.model}` : 
-                          'Incomplete Vehicle Data'
-                        }
-                      </h5>
-                      <p className="text-sm text-gray-600 font-mono mb-2">VIN: {vehicle.vin}</p>
-                      
-                      {(vehicle.fuelType || vehicle.vehicleClass || vehicle.maxWeight) && (
-                        <div className="flex flex-wrap gap-2 mb-2 text-sm">
-                          {vehicle.vehicleClass && (
-                            <span className="bg-gray-100 px-2 py-1 rounded">{vehicle.vehicleClass}</span>
-                          )}
-                          {vehicle.fuelType && (
-                            <span className="bg-blue-100 px-2 py-1 rounded">{vehicle.fuelType}</span>
-                          )}
-                          {vehicle.maxWeight && (
-                            <span className="bg-yellow-100 px-2 py-1 rounded">
-                              {vehicle.maxWeight.toLocaleString()} lbs
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      
-                      <DataSourceIndicator data={vehicle} />
-                    </div>
-                    
-                    <div className="text-right ml-4">
-                      {(!vehicle.make || !vehicle.model || !vehicle.year || vehicle.needsReview) && (
-                        <button
-                          onClick={() => handleEditVehicle(vehicle.vin)}
-                          className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-sm font-bold mb-2 transition-all duration-300 shadow-lg shadow-blue-900/20 hover:shadow-xl hover:shadow-blue-900/30 hover:scale-105 active:scale-95"
-                        >
-                          {!vehicle.make || !vehicle.model || !vehicle.year ? '✨ Complete Data' : '📝 Review & Edit'}
-                        </button>
-                      )}
-                      
-                      <div className="text-xs text-gray-500">
-                        {vehicle.missingFields.length > 0 && (
-                          <div className="text-amber-600 font-medium">
-                            Missing: {vehicle.missingFields.join(', ')}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex gap-4">
+          <div className="flex flex-wrap gap-4 pt-4">
             <button
               onClick={completeOnboarding}
-              className="bg-green-600 hover:bg-green-700 text-white px-8 py-3 rounded-lg font-medium text-lg"
-              disabled={enhancedVehicleData.filter(v => v.make && v.model && v.year).length === 0}
+              disabled={readyVehicles.length === 0}
+              className="pressable rounded-2xl border border-emerald-400/40 bg-emerald-600/30 px-6 py-3 font-display text-sm uppercase tracking-[0.4em] text-white disabled:opacity-40"
             >
-              Complete Onboarding & Add {enhancedVehicleData.filter(v => v.make && v.model && v.year).length} Vehicles →
+              Commit {readyVehicles.length} vehicles
             </button>
-            
-            {enhancedVehicleData.filter(v => !v.make || !v.model || !v.year).length > 0 && (
-              <div className="text-sm text-gray-600 flex items-center">
-                ⚠️ {enhancedVehicleData.filter(v => !v.make || !v.model || !v.year).length} vehicles need completion
-              </div>
-            )}
+            <button
+              onClick={resetOnboarding}
+              className="rounded-2xl border border-white/15 px-6 py-3 text-xs uppercase tracking-[0.4em] text-white/70"
+            >
+              Reset workflow
+            </button>
           </div>
-        </div>
+        </section>
       )}
 
-      {step === 5 && manualEntryData && (
-        <div>
+      {manualEntryData && step === 5 && (
+        <section className="neo-panel p-6">
           <ManualDataEntry
             template={manualEntryData.template}
             existingData={manualEntryData.existingData}
             onDataSubmitted={handleManualEntrySubmit}
-            onCancel={() => {
-              setManualEntryData(null);
-              setStep(3);
-            }}
+            onCancel={cancelManualEntry}
           />
-        </div>
+        </section>
       )}
 
-      {step === 4 && (
-        <div>
-          <div className="text-center mb-8">
-            <div className="text-6xl mb-4">🎉</div>
-            <h3 className="text-3xl font-bold text-green-600 mb-2">Onboarding Complete!</h3>
-            <p className="text-gray-600 text-lg">Your fleet has been successfully processed and integrated into the
-system.</p>
-          </div>
-
-          <div className="bg-green-50 border border-green-200 rounded-lg p-6 mb-8">
-            <h4 className="font-semibold text-green-800 mb-4">✅ Integration Summary:</h4>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-green-700">
-              <div>✅ {enhancedVehicleData.filter(v => v.make && v.model && v.year).length} vehicles added to Fleet Management</div>
-              <div>✅ {enhancedVehicleData.filter(v => v.make && v.model && v.year).length * 3} compliance tasks generated</div>
-              <div>✅ Vehicle profiles created with real API data where available</div>
-              <div>✅ Dashboard updated with comprehensive fleet data</div>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-4 justify-center">
-            <button
-              onClick={() => setCurrentPage('fleet')}
-              className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-8 py-4 rounded-2xl font-black text-lg shadow-xl shadow-blue-900/20 hover:shadow-2xl hover:shadow-blue-900/30 transition-all duration-300 hover:scale-105 active:scale-95"
-            >
-              🚛 View Fleet Management
-            </button>
-            <button
-              onClick={() => setCurrentPage('compliance')}
-              className="bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-700 hover:to-violet-700 text-white px-8 py-4 rounded-2xl font-black text-lg shadow-xl shadow-purple-900/20 hover:shadow-2xl hover:shadow-purple-900/30 transition-all duration-300 hover:scale-105 active:scale-95"
-            >
-              📋 View Compliance Tasks
-            </button>
-            <button
-              onClick={resetOnboarding}
-              className="bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 text-white px-8 py-4 rounded-2xl font-black text-lg shadow-xl shadow-emerald-900/20 hover:shadow-2xl hover:shadow-emerald-900/30 transition-all duration-300 hover:scale-105 active:scale-95"
-            >
-              📁 Start New Onboarding
-            </button>
-          </div>
-        </div>
-      )}
-      
-      {/* Document Upload Modal */}
       <DocumentUploadModal
         isOpen={isDocumentUploadOpen}
-        onClose={() => {
-          setIsDocumentUploadOpen(false);
-          console.log('🔄 Modal closed, refreshing vehicles...');
-          // Use setTimeout to ensure the modal has fully closed before refreshing
-          setTimeout(async () => {
-            try {
-              await centralizedFleetDataService.initializeData();
-            } catch (error) {
-              console.error('❌ Error refreshing vehicles:', error);
-              window.location.reload(); // Fallback: reload the page
-            }
-          }, 100);
-        }}
+        onClose={closeDocumentUploadModal}
         onDocumentsProcessed={handleDocumentProcessingComplete}
       />
     </div>
   );
 };
+
 
 // Fleet Management Component
 const FleetPage: React.FC = () => {
@@ -1032,7 +727,8 @@ const FleetPage: React.FC = () => {
     isLoading,
     error: fleetError,
     refresh: refreshFleetState,
-    addVehicles: addFleetVehicles
+    addVehicles: addFleetVehicles,
+    updateVehicle: updateFleetVehicle
   } = useFleetState({ autoRefresh: true });
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<FleetStatusViewFilter>('all');
@@ -1052,75 +748,81 @@ const FleetPage: React.FC = () => {
   };
 
   const handleDocumentsProcessed = async (extractedData: ExtractedVehicleData[]) => {
-    console.log('dY", Processing extracted document data:', extractedData);
+    logger.info('Processing extracted document data in fleet page', {
+      component: 'FleetPage',
+      layer: 'frontend',
+      extractedCount: extractedData.length
+    });
 
     const vehiclesToAdd = extractedData.map(data => safeVehicleData(data));
 
-    console.log('dY", Converting to vehicle records:', vehiclesToAdd);
-
     try {
       const result = await addFleetVehicles(vehiclesToAdd as FleetVehicleInput[]);
-      console.log('dY", Storage result summary:', result);
 
       if (result.success && result.processed > 0) {
-        console.log('dY", Successfully added vehicles, starting comprehensive refresh...');
-
-        FleetEvents.documentProcessed({
-          processedVehicles: extractedData.length,
-          successfulVehicles: result.processed,
-          failedVehicles: result.failed,
-          source: 'fleet_document_upload'
-        }, undefined, 'fleetPage');
-
         await Promise.all(
           extractedData.map(async (vehicleData) => {
-            if (vehicleData.vin) {
-              try {
-                await reconcilerAPI.addDocument(vehicleData, {
-                  fileName: `fleet_upload_${vehicleData.vin}_${Date.now()}`,
-                  source: 'fleet_document_upload',
-                  uploadDate: new Date().toISOString()
-                });
-              } catch (error) {
-                console.warn(`?s??,? Could not sync VIN ${vehicleData.vin} with reconcilerAPI:`, error);
-              }
+            if (!vehicleData.vin) {
+              return;
+            }
+
+            try {
+              await reconcilerAPI.addDocument(vehicleData, {
+                fileName: 'fleet_upload_' + vehicleData.vin + '_' + Date.now(),
+                source: 'fleet_document_upload',
+                uploadDate: new Date().toISOString()
+              });
+            } catch (error) {
+              logger.warn('Failed to sync vehicle with reconciler', {
+                component: 'FleetPage',
+                layer: 'frontend',
+                vin: vehicleData.vin
+              }, error instanceof Error ? error : undefined);
             }
           })
         );
-        console.log('?o. ReconcilerAPI sync completed');
 
         try {
-          console.log('dY", Clearing reconcilerAPI cache...');
           reconcilerAPI.clearCache();
           await refreshFleetState();
-          console.log('?o. Comprehensive data refresh completed!');
         } catch (error) {
-          console.error('??O Error during data refresh:', error);
+          logger.error('Failed to refresh fleet state after document ingestion', {
+            component: 'FleetPage',
+            layer: 'frontend'
+          }, error instanceof Error ? error : undefined);
           window.location.reload();
         }
       } else {
-        console.error('dY", No vehicles were successfully added:', result.errors);
+        logger.warn('No vehicles were processed from extracted data', {
+          component: 'FleetPage',
+          layer: 'frontend',
+          errors: result.errors
+        });
       }
     } catch (error) {
-      console.error('??O Error while adding vehicles from documents:', error);
+      logger.error('Failed to persist extracted vehicles', {
+        component: 'FleetPage',
+        layer: 'frontend'
+      }, error instanceof Error ? error : undefined);
     }
   };
 
   const handleMultiBatchDocumentsReconciled = async (vehicleCount: number) => {
-    console.log(`dY", Multi-batch reconciliation complete: ${vehicleCount} vehicles added`);
+    logger.info('Processing multi-batch document reconciliation', {
+      component: 'FleetPage',
+      layer: 'frontend',
+      vehicleCount
+    });
 
     try {
-      console.log('dY", Clearing reconcilerAPI cache after batch processing...');
       reconcilerAPI.clearCache();
-
-      console.log('dY", Reloading all vehicle data after batch processing...');
       await refreshFleetState();
-
       setSearchTerm(prev => prev);
-
-      console.log('?o. Batch processing refresh completed!');
     } catch (error) {
-      console.error('??O Error during batch processing refresh:', error);
+      logger.error('Failed to refresh fleet state after multi-batch reconciliation', {
+        component: 'FleetPage',
+        layer: 'frontend'
+      }, error instanceof Error ? error : undefined);
       window.location.reload();
     }
   };
@@ -1128,7 +830,6 @@ const FleetPage: React.FC = () => {
   // Function to fetch real compliance data for a vehicle (PRODUCTION MODE)
   const fetchRealComplianceData = async (vehicle: UnifiedVehicleData) => {
     try {
-      console.log(`🔄 Fetching real compliance data for VIN: ${vehicle.vin}, DOT: ${vehicle.dotNumber}`);
       
       // PRODUCTION MODE: Call the real comprehensive compliance service
       const realApiData = await comprehensiveComplianceService.getUnifiedComplianceData(
@@ -1136,7 +837,6 @@ const FleetPage: React.FC = () => {
         vehicle.dotNumber
       );
 
-      console.log('✅ Real API data received:', realApiData);
 
       // Transform the comprehensive API response to our compliance format
       const complianceData = {
@@ -1179,7 +879,7 @@ const FleetPage: React.FC = () => {
       };
 
       // Update the vehicle in persistent storage with real data
-      persistentFleetStorage.updateVehicle(vehicle.id, { 
+      await updateFleetVehicle(vehicle.id, { 
         complianceData: complianceData,
         lastUpdated: new Date().toISOString()
       });
@@ -1189,7 +889,6 @@ const FleetPage: React.FC = () => {
       
       return complianceData;
     } catch (error) {
-      console.error('❌ Failed to fetch real compliance data:', error);
       
       // Return blank/no data when API fails - no fallback to mock data
       const noDataResponse = {
@@ -1286,20 +985,9 @@ const FleetPage: React.FC = () => {
 
   // Get compliance data - real API data, extracted document data, or show blanks
   const getComplianceData = (vehicle: UnifiedVehicleData) => {
-    // Debug: Log the vehicle data to see what's stored
-    console.log(`🔍 Getting compliance data for vehicle ${vehicle.truckNumber || vehicle.vin}:`, {
-      id: vehicle.id,
-      registrationExpirationDate: vehicle.registrationExpirationDate,
-      insuranceExpirationDate: vehicle.insuranceExpirationDate,  
-      registrationNumber: vehicle.registrationNumber,
-      insuranceCarrier: vehicle.insuranceCarrier,
-      policyNumber: vehicle.policyNumber,
-      hasComplianceData: !!vehicle.complianceData
-    });
 
     // Check if vehicle has real compliance data stored (highest priority)
     if (vehicle.complianceData) {
-      console.log(`📄 Using stored compliance data for ${vehicle.truckNumber}`);
       return {
         ...vehicle.complianceData,
         isRealData: vehicle.complianceData.apiMetadata?.dataSource === 'real_api',
@@ -1310,11 +998,7 @@ const FleetPage: React.FC = () => {
 
     // Check if vehicle has extracted document data (medium priority)
     const hasDocumentData = vehicle.registrationExpirationDate || vehicle.insuranceCarrier || vehicle.policyNumber;
-    console.log(`📋 Document data check for ${vehicle.truckNumber || vehicle.vin}: hasDocumentData=${hasDocumentData}`);
     if (hasDocumentData) {
-      console.log(`✅ Using extracted document data for ${vehicle.truckNumber}`);
-      console.log(`   Registration: expiry=${vehicle.registrationExpirationDate}, number=${vehicle.registrationNumber}`);
-      console.log(`   Insurance: carrier=${vehicle.insuranceCarrier}, expiry=${vehicle.insuranceExpirationDate}`);
       const calculateDaysUntilExpiry = (dateStr?: string) => {
         if (!dateStr) return null;
         try {
@@ -1374,7 +1058,6 @@ const FleetPage: React.FC = () => {
     }
 
     // NO DATA - Show blanks until data is available
-    console.log(`⚠️ No document or compliance data found for ${vehicle.truckNumber || vehicle.vin}, using blank placeholders`);
     return {
       dotInspection: { 
         status: 'warning' as const, 
@@ -1450,15 +1133,6 @@ const FleetPage: React.FC = () => {
     return matchesSearch && matchesStatus;
   });
   
-  console.log('🚗 Unified Vehicle display debug:', {
-    fleetVehicles: fleetVehicles.length,
-    filteredVehicles: allFilteredVehicles.length,
-    dataSourceBreakdown: {
-      persistent: fleetVehicles.filter(v => v.dataSource === 'persistent').length,
-      reconciled: fleetVehicles.filter(v => v.dataSource === 'reconciled').length,
-      merged: fleetVehicles.filter(v => v.dataSource === 'merged').length
-    }
-  });
 
   // Use centralized service for consistent stats
   const stats = {
@@ -1468,13 +1142,6 @@ const FleetPage: React.FC = () => {
     complianceWarnings: fleetVehicles.filter(v => (v.complianceScore || 0) < 80 && (v.complianceScore || 0) >= 60).length,
     complianceExpired: fleetVehicles.filter(v => (v.complianceScore || 0) < 60).length
   };
-
-  console.log('📊 Dashboard stats calculation:', {
-    fleetVehicles: fleetVehicles.length,
-    reconciledCount: fleetVehicles.filter(v => v.dataSource === 'reconciled').length,
-    calculatedTotal: stats.total,
-    statsObject: stats
-  });
 
   // Convert vehicle data to enhanced card format
   const mapVehicleToCardFormat = (vehicle: UnifiedVehicleData) => {
@@ -1575,205 +1242,164 @@ const FleetPage: React.FC = () => {
   // };
 
   return (
-    <div className="max-w-7xl">
-      {/* Modern Fleet Header */}
-      <div className="bg-gradient-to-r from-slate-800 to-slate-900 rounded-xl p-8 mb-8 text-white">
-        <div className="flex items-center justify-between">
+    <div className="space-y-10">
+      {/* Fleet Command Header */}
+      <section className="neo-panel p-8 text-white">
+        <div className="flex flex-wrap items-center justify-between gap-6">
           <div>
-            <h2 className="text-2xl md:text-4xl font-bold mb-2 flex items-center">
-              <span className="mr-3">🚛</span>
-              Fleet Management
-            </h2>
-            <p className="text-slate-300 text-lg">Monitor and manage your truck fleet operations</p>
+            <p className="text-xs uppercase tracking-[0.5em] text-white/60">Fleet operations</p>
+            <h2 className="font-display text-3xl md:text-4xl">Vehicle command lattice</h2>
+            <p className="text-sm text-white/60">Live roster of tractors, compliance posture, and ingest signals.</p>
           </div>
-          <div className="text-right">
-            <div className="text-3xl font-bold">{stats.total}</div>
-            <div className="text-slate-300">Total Trucks</div>
+          <div className="grid gap-3 text-right">
+            <div>
+              <p className="text-xs uppercase tracking-[0.4em] text-white/60">Total units</p>
+              <p className="font-display text-4xl">{stats.total}</p>
+            </div>
+            <div className="flex gap-3 text-xs justify-end text-white/70">
+              <span className="data-chip text-emerald-200">Active {stats.active}</span>
+              <span className="data-chip text-orange-200">Idle {stats.inactive}</span>
+            </div>
           </div>
-      </div>
-    </div>
+        </div>
+      </section>
 
       {fleetError && (
-        <div className="mb-4 rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <section className="neo-panel border border-red-400/40 bg-red-900/30 p-4 text-sm text-red-100">
           {fleetError}
-        </div>
+        </section>
       )}
 
       {isLoading && (
-        <div className="mb-4 rounded border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
-          Loading fleet data…
-        </div>
+        <section className="neo-panel border border-cyan-400/30 bg-cyan-900/20 p-4 text-sm text-cyan-100">
+          Loading fleet data...
+        </section>
       )}
 
-      {/* Fleet Stats - Minimalistic */}
-      <div className="flex items-center gap-4 mb-4 text-sm">
-        <div className="flex items-center gap-1">
-          <span className="text-gray-600">Total:</span>
-          <span className="font-semibold">{stats.total}</span>
+      {/* Fleet Stats */}
+      <section className="neo-panel p-6 text-white">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-2xl border border-white/10 bg-white/5/10 p-4">
+            <p className="text-xs uppercase tracking-[0.3em] text-white/60">Total</p>
+            <p className="font-display text-3xl">{stats.total}</p>
+          </div>
+          <div className="rounded-2xl border border-emerald-400/30 bg-emerald-500/10 p-4">
+            <p className="text-xs uppercase tracking-[0.3em] text-emerald-200">Active</p>
+            <p className="font-display text-3xl text-emerald-100">{stats.active}</p>
+          </div>
+          <div className="rounded-2xl border border-slate-400/30 bg-slate-500/10 p-4">
+            <p className="text-xs uppercase tracking-[0.3em] text-white/50">Idle</p>
+            <p className="font-display text-3xl text-white/80">{stats.inactive}</p>
+          </div>
+          <div className="rounded-2xl border border-red-400/30 bg-red-500/10 p-4">
+            <p className="text-xs uppercase tracking-[0.3em] text-red-200">Issues</p>
+            <p className="font-display text-3xl text-red-100">{stats.complianceWarnings + stats.complianceExpired}</p>
+          </div>
         </div>
-        <div className="flex items-center gap-1">
-          <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-          <span className="text-gray-600">Active:</span>
-          <span className="font-semibold">{stats.active}</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <div className="w-2 h-2 bg-gray-400 rounded-full"></div>
-          <span className="text-gray-600">Parked:</span>
-          <span className="font-semibold">{stats.inactive}</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <div className="w-2 h-2 bg-red-500 rounded-full"></div>
-          <span className="text-gray-600">Issues:</span>
-          <span className="font-semibold">{stats.complianceWarnings + stats.complianceExpired}</span>
-        </div>
-      </div>
+      </section>
 
-      <div className="flex items-center gap-3 mb-4">
-        <div className="flex-1">
+      <section className="neo-panel p-6 space-y-4">
+        <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
           <input
             type="text"
             placeholder="Search vehicles..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+            className="w-full rounded-2xl border border-white/10 bg-white/5 px-5 py-3 text-sm text-white/80 placeholder-white/40 focus:border-white/40"
           />
+          <div className="flex flex-wrap items-center gap-3">
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as 'all' | 'active' | 'inactive' | 'maintenance')}
+              className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white"
+            >
+              <option value="all">All Status</option>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+            <div className="flex overflow-hidden rounded-2xl border border-white/10">
+              <button
+                onClick={() => setViewMode('cards')}
+                className={`px-4 py-2 text-xs uppercase tracking-[0.3em] ${
+                  viewMode === 'cards' ? 'bg-white/10 text-white' : 'text-white/60'
+                }`}
+              >
+                Cards
+              </button>
+              <button
+                onClick={() => setViewMode('table')}
+                className={`px-4 py-2 text-xs uppercase tracking-[0.3em] ${
+                  viewMode === 'table' ? 'bg-white/10 text-white' : 'text-white/60'
+                }`}
+              >
+                Table
+              </button>
+            </div>
+          </div>
         </div>
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as 'all' | 'active' | 'inactive' | 'maintenance')}
-          className="px-3 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-        >
-          <option value="all">All Status</option>
-          <option value="active">Active</option>
-          <option value="inactive">Inactive</option>
-        </select>
-        
-        {/* View Mode Toggle */}
-        <div className="flex bg-gray-100 rounded overflow-hidden">
-          <button
-            onClick={() => setViewMode('cards')}
-            className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-              viewMode === 'cards'
-                ? 'bg-blue-500 text-white'
-                : 'text-gray-600 hover:text-gray-800 hover:bg-gray-200'
-            }`}
-          >
-            Cards
-          </button>
-          <button
-            onClick={() => setViewMode('table')}
-            className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-              viewMode === 'table'
-                ? 'bg-blue-500 text-white'
-                : 'text-gray-600 hover:text-gray-800 hover:bg-gray-200'
-            }`}
-          >
-            Table
-          </button>
-        </div>
-      </div>
-        
-        {/* Action Buttons - Minimalistic */}
-        <div className="flex items-center gap-2 mb-4">
-          <button 
-            onClick={() => setIsAddModalOpen(true)}
-            className="px-3 py-1.5 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
-          >
+      </section>
+
+      <section className="neo-panel p-6 space-y-4 text-white">
+        <div className="flex flex-wrap gap-3">
+          <button onClick={() => setIsAddModalOpen(true)} className="pressable rounded-2xl border border-white/20 bg-white/10 px-4 py-2 text-xs uppercase tracking-[0.3em]">
             + Add Vehicle
           </button>
-          <button 
-            onClick={() => setIsBulkUploadOpen(true)}
-            className="px-3 py-1.5 text-sm bg-gray-500 hover:bg-gray-600 text-white rounded transition-colors"
-          >
+          <button onClick={() => setIsBulkUploadOpen(true)} className="rounded-2xl border border-white/15 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.3em] text-white/80">
             Bulk Upload
           </button>
-          <button 
-            onClick={() => setIsDocumentUploadOpen(true)}
-            className="px-3 py-1.5 text-sm bg-green-500 hover:bg-green-600 text-white rounded transition-colors"
-          >
+          <button onClick={() => setIsDocumentUploadOpen(true)} className="rounded-2xl border border-emerald-400/40 bg-emerald-500/20 px-4 py-2 text-xs uppercase tracking-[0.3em] text-emerald-100">
             Upload Documents
           </button>
-          <button 
-            onClick={() => setIsMultiBatchUploadOpen(true)}
-            className="px-3 py-1.5 text-sm bg-purple-500 hover:bg-purple-600 text-white rounded transition-colors"
-          >
+          <button onClick={() => setIsMultiBatchUploadOpen(true)} className="rounded-2xl border border-purple-400/40 bg-purple-500/20 px-4 py-2 text-xs uppercase tracking-[0.3em] text-purple-100">
             Multi-Batch
           </button>
-          <button 
-            onClick={() => setIsTestRunnerOpen(true)}
-            className="px-3 py-1.5 text-sm bg-yellow-500 hover:bg-yellow-600 text-white rounded transition-colors"
-          >
+          <button onClick={() => setIsTestRunnerOpen(true)} className="rounded-2xl border border-yellow-400/40 bg-yellow-500/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-yellow-100">
             Test Runner
           </button>
         </div>
-          {/* Additional Actions */}
-          <div className="flex items-center gap-2 mb-4">
-            <button 
-              onClick={() => documentDownloadService.downloadComplianceSummary(fleetVehicles)}
-              className="px-3 py-1.5 text-sm bg-gray-500 hover:bg-gray-600 text-white rounded transition-colors"
-              title="Download fleet compliance report"
-            >
-              Download Report
-            </button>
-            <button 
-              onClick={async () => {
-                console.log('🔄 Starting bulk compliance sync...');
-                for (const unifiedVehicle of fleetVehicles) {
-                  await fetchRealComplianceData(unifiedVehicle);
-                  await new Promise(resolve => setTimeout(resolve, 500));
-                }
-                console.log('✅ Bulk compliance sync completed!');
-              }}
-              className="px-3 py-1.5 text-sm bg-gray-500 hover:bg-gray-600 text-white rounded transition-colors"
-              title="Sync compliance data"
-            >
-              Sync All
-            </button>
-            <button 
-              onClick={async () => {
-                if (window.confirm('Clear all fleet data? This cannot be undone.')) {
-                  console.log('🗑️ Clearing all fleet data...');
-                  
-                  try {
-                    // Use centralized service for atomic clear operation
-                    console.log('🗑️ Using centralized service to clear all fleet data...');
-                    
-                    const result = await centralizedFleetDataService.clearAllFleetData();
-                    
-                    if (result.success) {
-                      console.log('✅ Fleet data cleared successfully via centralized service!');
-                      
-                      // Reset UI state immediately
-                      setSearchTerm('');
-                      setStatusFilter('all');
-                      
-                      // UI will update automatically via subscription - no manual reload!
-                      
-                    } else {
-                      console.error('❌ Clear operation failed:', result.errors);
-                      if (result.rollbackAvailable) {
-                        console.log('🔄 Rollback was performed automatically');
-                      }
-                    }
-                    
-                  } catch (error) {
-                    console.error('❌ Error clearing fleet data:', error);
-                    // Still try to reload in case of partial success
-                    void refreshFleetState();
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={() => documentDownloadService.downloadComplianceSummary(fleetVehicles)}
+            className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.3em] text-white/70"
+          >
+            Download Report
+          </button>
+          <button
+            onClick={async () => {
+              for (const unifiedVehicle of fleetVehicles) {
+                await fetchRealComplianceData(unifiedVehicle);
+                await new Promise(resolve => setTimeout(resolve, 500));
+              }
+            }}
+            className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.3em] text-white/70"
+          >
+            Sync All
+          </button>
+          <button
+            onClick={async () => {
+              if (window.confirm('Clear all fleet data? This cannot be undone.')) {
+                try {
+                  const result = await centralizedFleetDataService.clearAllFleetData();
+                  if (result.success) {
+                    setSearchTerm('');
+                    setStatusFilter('all');
                   }
+                } catch (error) {
+                  void refreshFleetState();
                 }
-              }}
-              className="px-3 py-1.5 text-sm bg-red-500 hover:bg-red-600 text-white rounded transition-colors"
-              title="Clear all fleet data"
-            >
-              Clear Fleet
-            </button>
-          </div>
+              }
+            }}
+            className="rounded-2xl border border-red-400/40 bg-red-500/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-red-100"
+          >
+            Clear Fleet
+          </button>
+        </div>
+      </section>
 
 
       {/* Vehicle Display - Cards or Table */}
       {viewMode === 'cards' ? (
-        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {allFilteredVehicles.map((vehicle) => {
             const cardData = mapVehicleToCardFormat(vehicle);
 
@@ -1783,40 +1409,37 @@ const FleetPage: React.FC = () => {
                 vehicle={cardData.vehicle}
                 compliance={cardData.compliance}
                 onViewDetails={() => {
-                  console.log('View details for vehicle:', vehicle.id);
                 }}
                 onScheduleService={() => {
-                  console.log('Schedule service for vehicle:', vehicle.id);
                 }}
                 onEditVehicle={() => {
-                  console.log('Edit vehicle:', vehicle.id);
                 }}
               />
             );
           })}
         </div>
       ) : (
-        <div className="bg-white border border-gray-200 rounded">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b">
+        <div className="neo-panel overflow-x-auto p-0">
+          <table className="w-full text-sm text-white/80">
+            <thead className="bg-white/5 text-white/60">
               <tr>
-                <th className="px-3 py-2 text-center text-xs font-medium text-gray-600 uppercase">Truck</th>
-                <th className="px-3 py-2 text-center text-xs font-medium text-gray-600 uppercase">Vehicle</th>
-                <th className="px-3 py-2 text-center text-xs font-medium text-gray-600 uppercase">VIN (Full)</th>
-                <th className="px-3 py-2 text-center text-xs font-medium text-gray-600 uppercase">License</th>
-                <th className="px-3 py-2 text-center text-xs font-medium text-gray-600 uppercase">Status</th>
-                <th className="px-3 py-2 text-center text-xs font-medium text-gray-600 uppercase">DOT</th>
-                <th className="px-3 py-2 text-center text-xs font-medium text-gray-600 uppercase">Registration Expiry</th>
-                <th className="px-3 py-2 text-center text-xs font-medium text-gray-600 uppercase">Insurance Expiry</th>
-                <th className="px-3 py-2 text-center text-xs font-medium text-gray-600 uppercase">IFTA</th>
-                <th className="px-3 py-2 text-center text-xs font-medium text-gray-600 uppercase">Actions</th>
+                <th className="px-3 py-3 text-center text-xs uppercase tracking-[0.3em]">Truck</th>
+                <th className="px-3 py-3 text-center text-xs uppercase tracking-[0.3em]">Vehicle</th>
+                <th className="px-3 py-3 text-center text-xs uppercase tracking-[0.3em]">VIN</th>
+                <th className="px-3 py-3 text-center text-xs uppercase tracking-[0.3em]">License</th>
+                <th className="px-3 py-3 text-center text-xs uppercase tracking-[0.3em]">Status</th>
+                <th className="px-3 py-3 text-center text-xs uppercase tracking-[0.3em]">DOT</th>
+                <th className="px-3 py-3 text-center text-xs uppercase tracking-[0.3em]">Registration</th>
+                <th className="px-3 py-3 text-center text-xs uppercase tracking-[0.3em]">Insurance</th>
+                <th className="px-3 py-3 text-center text-xs uppercase tracking-[0.3em]">IFTA</th>
+                <th className="px-3 py-3 text-center text-xs uppercase tracking-[0.3em]">Actions</th>
               </tr>
             </thead>
             <tbody>
               {allFilteredVehicles.map((vehicle) => {
                 const compliance = getComplianceData(vehicle);
                 return (
-                <tr key={vehicle.id} className="border-b border-gray-100 hover:bg-gray-50">
+                <tr key={vehicle.id} className="border-b border-white/5 hover:bg-white/5">
                   <td className="px-3 py-3 text-center text-sm">
                     {vehicle.truckNumber ? 
                       vehicle.truckNumber.replace('Truck #', '#') : 
@@ -1902,13 +1525,11 @@ const FleetPage: React.FC = () => {
         isOpen={isDocumentUploadOpen}
         onClose={() => {
           setIsDocumentUploadOpen(false);
-          console.log('🔄 Modal closed, refreshing vehicles...');
           // Use setTimeout to ensure the modal has fully closed before refreshing
           setTimeout(async () => {
             try {
               await centralizedFleetDataService.initializeData();
             } catch (error) {
-              console.error('❌ Error refreshing vehicles:', error);
               window.location.reload(); // Fallback: reload the page
             }
           }, 100);
@@ -1934,345 +1555,236 @@ const FleetPage: React.FC = () => {
 
 // Compliance Dashboard Component
 const CompliancePage: React.FC = () => {
-  const [tasks, setTasks] = useState<ComplianceTask[]>([]);
+  const {
+    tasks,
+    stats,
+    loading: complianceLoading,
+    error: complianceError,
+    refresh: refreshCompliance,
+    updateTaskStatus
+  } = useComplianceData();
   const [selectedTask, setSelectedTask] = useState<ComplianceTask | null>(null);
   const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'in_progress' | 'completed' | 'overdue'>('all');
   const [filterPriority, setFilterPriority] = useState<'all' | 'critical' | 'high' | 'medium' | 'low'>('all');
   const [searchTerm, setSearchTerm] = useState('');
 
-  useEffect(() => {
-    setTasks(fleetDataManager.getAllComplianceTasks());
-    const unsubscribe = fleetDataManager.subscribe(() => {
-      setTasks(fleetDataManager.getAllComplianceTasks());
+  const filteredTasks = useMemo(() => {
+    return tasks.filter((task) => {
+      const matchesSearch =
+        searchTerm.trim() === '' ||
+        task.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        task.vehicleVin.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        task.vehicleName.toLowerCase().includes(searchTerm.toLowerCase());
+
+      const matchesStatus = filterStatus === 'all' || task.status === filterStatus;
+      const matchesPriority = filterPriority === 'all' || task.priority === filterPriority;
+
+      return matchesSearch && matchesStatus && matchesPriority;
     });
-    return unsubscribe;
-  }, []);
+  }, [tasks, searchTerm, filterStatus, filterPriority]);
 
-  const filteredTasks = tasks.filter(task => {
-    const matchesSearch = searchTerm === '' ||
-      task.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      task.vehicleVin.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      task.vehicleName.toLowerCase().includes(searchTerm.toLowerCase());
-
-    const matchesStatus = filterStatus === 'all' || task.status === filterStatus;
-    const matchesPriority = filterPriority === 'all' || task.priority === filterPriority;
-
-    return matchesSearch && matchesStatus && matchesPriority;
-  });
-
-  const stats = fleetDataManager.getComplianceStats();
-
-  const getPriorityColor = (priority: string) => {
-    switch (priority) {
-      case 'critical': return 'bg-gradient-to-r from-red-100 to-rose-100 text-red-800 border border-red-300 shadow-sm';
-      case 'high': return 'bg-gradient-to-r from-orange-100 to-amber-100 text-orange-800 border border-orange-300 shadow-sm';
-      case 'medium': return 'bg-gradient-to-r from-yellow-100 to-amber-100 text-yellow-800 border border-yellow-300 shadow-sm';
-      case 'low': return 'bg-gradient-to-r from-slate-100 to-gray-100 text-slate-700 border border-slate-300 shadow-sm';
-      default: return 'bg-gradient-to-r from-slate-100 to-gray-100 text-slate-700 border border-slate-300 shadow-sm';
+  useEffect(() => {
+    if (selectedTask) {
+      const updated = tasks.find((task) => task.id === selectedTask.id);
+      if (updated) {
+        setSelectedTask(updated);
+      }
     }
+  }, [tasks, selectedTask]);
+
+  const priorityTone: Record<ComplianceTask['priority'], string> = {
+    critical: 'border-red-400/40 bg-red-500/20 text-red-100',
+    high: 'border-orange-400/40 bg-orange-500/20 text-orange-100',
+    medium: 'border-amber-300/40 bg-amber-300/10 text-amber-100',
+    low: 'border-white/10 bg-white/5 text-white/70'
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'pending': return 'bg-gradient-to-r from-blue-100 to-indigo-100 text-blue-800 border border-blue-300 shadow-sm';
-      case 'in_progress': return 'bg-gradient-to-r from-purple-100 to-violet-100 text-purple-800 border border-purple-300 shadow-sm';
-      case 'completed': return 'bg-gradient-to-r from-emerald-100 to-green-100 text-emerald-800 border border-emerald-300 shadow-sm';
-      case 'overdue': return 'bg-gradient-to-r from-red-100 to-rose-100 text-red-800 border border-red-300 shadow-sm';
-      default: return 'bg-gradient-to-r from-slate-100 to-gray-100 text-slate-700 border border-slate-300 shadow-sm';
-    }
-  };
-
-  const getDueDateColor = (daysUntilDue: number) => {
-    if (daysUntilDue < 0) return 'text-red-600'; // Overdue
-    if (daysUntilDue <= 7) return 'text-orange-600'; // Due soon
-    if (daysUntilDue <= 30) return 'text-yellow-600'; // Due this month
-    return 'text-gray-600'; // Not urgent
+  const statusTone: Record<ComplianceTask['status'], string> = {
+    pending: 'text-orange-200',
+    in_progress: 'text-cyan-200',
+    completed: 'text-emerald-200',
+    overdue: 'text-red-200'
   };
 
   const handleStatusUpdate = (taskId: string, newStatus: ComplianceTask['status']) => {
-    fleetDataManager.updateTaskStatus(taskId, newStatus);
+    updateTaskStatus(taskId, newStatus);
   };
 
   return (
-    <div className="max-w-7xl">
-      <h2 className="text-3xl font-bold mb-6">📋 Compliance Dashboard</h2>
+    <div className="space-y-10">
+      <section className="neo-panel p-8 text-white">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.5em] text-white/60">Compliance intelligence</p>
+            <h2 className="font-display text-3xl">Live obligations board</h2>
+            <p className="text-sm text-white/60">Task load, deadlines, and accountability in one live console.</p>
+          </div>
+          <div className="flex gap-3">
+            <button onClick={() => refreshCompliance()} className="pressable rounded-2xl border border-white/20 px-4 py-2 text-xs uppercase tracking-[0.4em]">
+              Refresh
+            </button>
+          </div>
+        </div>
+        {complianceError && <p className="mt-4 text-sm text-red-200">{complianceError}</p>}
+        <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-2xl border border-white/10 bg-white/5/10 p-4">
+            <p className="text-xs uppercase tracking-[0.3em] text-white/60">Total</p>
+            <p className="font-display text-3xl">{stats.total}</p>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-white/5/10 p-4">
+            <p className="text-xs uppercase tracking-[0.3em] text-orange-200">Pending</p>
+            <p className="font-display text-3xl">{stats.pending}</p>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-white/5/10 p-4">
+            <p className="text-xs uppercase tracking-[0.3em] text-emerald-200">Completed</p>
+            <p className="font-display text-3xl">{stats.completed}</p>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-white/5/10 p-4">
+            <p className="text-xs uppercase tracking-[0.3em] text-red-200">Overdue</p>
+            <p className="font-display text-3xl">{stats.overdue}</p>
+          </div>
+        </div>
+      </section>
 
-      {/* Statistics */}
-      <div className="grid grid-cols-2 md:grid-cols-7 gap-4 mb-8">
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <div className="font-semibold text-blue-800">Total Tasks</div>
-          <div className="text-3xl text-blue-600">{stats.total}</div>
-        </div>
-        <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-          <div className="font-semibold text-gray-800">Pending</div>
-          <div className="text-3xl text-gray-600">{stats.pending}</div>
-        </div>
-        <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-          <div className="font-semibold text-purple-800">In Progress</div>
-          <div className="text-3xl text-purple-600">{stats.inProgress}</div>
-        </div>
-        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-          <div className="font-semibold text-green-800">Completed</div>
-          <div className="text-3xl text-green-600">{stats.completed}</div>
-        </div>
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-          <div className="font-semibold text-red-800">Overdue</div>
-          <div className="text-3xl text-red-600">{stats.overdue}</div>
-        </div>
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-          <div className="font-semibold text-red-800">Critical</div>
-          <div className="text-3xl text-red-600">{stats.critical}</div>
-        </div>
-        <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
-          <div className="font-semibold text-orange-800">High Priority</div>
-          <div className="text-3xl text-orange-600">{stats.high}</div>
-        </div>
-      </div>
-
-      {/* Filters */}
-      <div className="flex flex-col md:flex-row gap-4 mb-6">
-        <div className="flex-1">
+      <section className="neo-panel p-6 space-y-4">
+        <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
           <input
             type="text"
-            placeholder="Search tasks by title, vehicle, or VIN..."
+            placeholder="Search tasks by vehicle, VIN, or keyword"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500
-focus:border-blue-500"
+            className="rounded-2xl border border-white/10 bg-white/5 px-5 py-3 text-sm text-white/80 placeholder-white/40 focus:border-white/40"
           />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value as typeof filterStatus)}
+              className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white"
+            >
+              <option value="all">All status</option>
+              <option value="pending">Pending</option>
+              <option value="in_progress">In progress</option>
+              <option value="completed">Completed</option>
+              <option value="overdue">Overdue</option>
+            </select>
+            <select
+              value={filterPriority}
+              onChange={(e) => setFilterPriority(e.target.value as typeof filterPriority)}
+              className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white"
+            >
+              <option value="all">All priority</option>
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value as 'all' | 'pending' | 'in_progress' | 'completed' | 'overdue')}
-            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          >
-            <option value="all">All Status</option>
-            <option value="pending">Pending</option>
-            <option value="in_progress">In Progress</option>
-            <option value="completed">Completed</option>
-            <option value="overdue">Overdue</option>
-          </select>
-          <select
-            value={filterPriority}
-            onChange={(e) => setFilterPriority(e.target.value as 'all' | 'high' | 'medium' | 'low')}
-            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          >
-            <option value="all">All Priority</option>
-            <option value="critical">Critical</option>
-            <option value="high">High</option>
-            <option value="medium">Medium</option>
-            <option value="low">Low</option>
-          </select>
-          <button className="px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl font-bold shadow-lg shadow-blue-900/20 hover:shadow-xl hover:shadow-blue-900/30 transition-all duration-300 hover:scale-105 active:scale-95">
-            ➕ Add Task
-          </button>
-        </div>
-      </div>
+      </section>
 
-      {/* Tasks Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-        {filteredTasks.map((task) => (
-          <div key={task.id} className="bg-white border border-gray-200 rounded-lg p-6 hover:shadow-md transition-shadow">
-            <div className="flex justify-between items-start mb-4">
-              <div className="flex-1">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className={`px-2 py-1 text-xs font-medium rounded ${getPriorityColor(task.priority)}`}>
-                    {task.priority.toUpperCase()}
-                  </span>
-                  <span className={`px-2 py-1 text-xs font-medium rounded ${getStatusColor(task.status)}`}>
-                    {task.status.replace('_', ' ').toUpperCase()}
-                  </span>
-                </div>
-                <h3 className="font-semibold text-lg text-gray-900 mb-2">{task.title}</h3>
-                <p className="text-sm text-gray-600 mb-3">{task.description}</p>
-
-                <div className="text-sm text-gray-500 space-y-1">
-                  <div>🚛 {task.vehicleName}</div>
-                  <div className="font-mono">VIN: {task.vehicleVin.slice(-8)}</div>
-                  <div>📋 {task.category}</div>
-                  <div>👤 {task.assignedTo}</div>
-                  {task.estimatedCost && (
-                    <div>💰 ${task.estimatedCost.toLocaleString()}</div>
-                  )}
-                </div>
-              </div>
+      <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+        <article className="neo-panel p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.35em] text-white/50">Tasks</p>
+              <h3 className="font-display text-2xl text-white">{filteredTasks.length} active</h3>
             </div>
-
-            <div className="pt-4">
-              <div className="flex justify-between items-center mb-3">
-                <span className="text-sm text-gray-500">Due Date</span>
-                <span className={`text-sm font-medium ${getDueDateColor(task.daysUntilDue)}`}>
-                  {task.daysUntilDue < 0
-                    ? `${Math.abs(task.daysUntilDue)} days overdue`
-                    : `${task.daysUntilDue} days remaining`
-                  }
-                </span>
-              </div>
-
-              <div className="flex gap-2">
-                {task.status === 'pending' && (
-                  <button
-                    onClick={() => handleStatusUpdate(task.id, 'in_progress')}
-                    className="flex-1 px-3 py-2 text-xs bg-purple-600 text-white rounded hover:bg-purple-700"
-                  >
-                    Start
-                  </button>
-                )}
-                {task.status === 'in_progress' && (
-                  <button
-                    onClick={() => handleStatusUpdate(task.id, 'completed')}
-                    className="flex-1 px-3 py-2 text-xs bg-green-600 text-white rounded hover:bg-green-700"
-                  >
-                    Complete
-                  </button>
-                )}
+            {complianceLoading && <span className="data-chip text-white/60">Loading...</span>}
+          </div>
+          <div className="space-y-4">
+            {filteredTasks.length === 0 && (
+              <p className="text-sm text-white/60">No tasks match your filters.</p>
+            )}
+            {filteredTasks.map((task) => {
+              const isActive = selectedTask?.id === task.id;
+              return (
                 <button
+                  key={task.id}
                   onClick={() => setSelectedTask(task)}
-                  className="flex-1 px-3 py-2 text-xs bg-gray-600 text-white rounded hover:bg-gray-700"
+                  className={`w-full rounded-2xl border px-5 py-4 text-left ${
+                    isActive ? 'border-white/40 bg-white/10 shadow-lg' : 'border-white/10 bg-black/40'
+                  }`}
                 >
-                  View Details
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-display text-lg text-white">{task.title}</p>
+                      <p className="text-sm text-white/60">{task.vehicleName} � {task.vehicleVin}</p>
+                    </div>
+                    <span className={`data-chip ${priorityTone[task.priority]}`}>{task.priority}</span>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between text-xs text-white/60">
+                    <span className={statusTone[task.status]}>Status: {task.status}</span>
+                    <span>{task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'No due date'}</span>
+                  </div>
                 </button>
-              </div>
-            </div>
+              );
+            })}
           </div>
-        ))}
-      </div>
+        </article>
 
-      {filteredTasks.length === 0 && (
-        <div className="text-center py-12">
-          <div className="text-gray-400 text-6xl mb-4">📋</div>
-          <h3 className="text-lg font-medium text-gray-900 mb-2">No compliance tasks found</h3>
-          <p className="text-gray-500">
-            {searchTerm || filterStatus !== 'all' || filterPriority !== 'all'
-              ? 'Try adjusting your search or filters'
-              : 'Compliance tasks will appear here as vehicles are added to your fleet'
-            }
-          </p>
-        </div>
-      )}
-
-      {/* Task Details Modal */}
-      {selectedTask && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-start mb-4">
-              <div>
-                <h3 className="text-xl font-bold text-gray-900">{selectedTask.title}</h3>
-                <p className="text-gray-600">{selectedTask.vehicleName}</p>
-              </div>
-              <button
-                onClick={() => setSelectedTask(null)}
-                className="text-gray-400 hover:text-gray-600"
-              >
-                ✕
-              </button>
-            </div>
-
+        <article className="neo-panel p-6 space-y-4">
+          {selectedTask ? (
             <div className="space-y-4">
-              <div>
-                <h4 className="font-semibold mb-2">Description</h4>
-                <p className="text-gray-700">{selectedTask.description}</p>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.35em] text-white/50">Details</p>
+                  <h3 className="font-display text-2xl text-white">{selectedTask.title}</h3>
+                  <p className="text-sm text-white/60">{selectedTask.vehicleName} � {selectedTask.vehicleVin}</p>
+                </div>
+                <span className={`data-chip ${priorityTone[selectedTask.priority]}`}>{selectedTask.priority}</span>
               </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <h4 className="font-semibold mb-2">Priority</h4>
-                  <span className={`px-2 py-1 text-sm rounded ${getPriorityColor(selectedTask.priority)}`}>
-                    {selectedTask.priority.toUpperCase()}
-                  </span>
-                </div>
-                <div>
-                  <h4 className="font-semibold mb-2">Status</h4>
-                  <span className={`px-2 py-1 text-sm rounded ${getStatusColor(selectedTask.status)}`}>
-                    {selectedTask.status.replace('_', ' ').toUpperCase()}
-                  </span>
-                </div>
+              <p className="text-sm text-white/70">{selectedTask.description}</p>
+              <div className="grid gap-3 text-sm text-white/70">
+                <p><span className="text-white/40">Due:</span> {selectedTask.dueDate ? new Date(selectedTask.dueDate).toLocaleString() : 'TBD'}</p>
+                <p><span className="text-white/40">Jurisdiction:</span> {selectedTask.jurisdiction || '�'}</p>
+                <p><span className="text-white/40">Assigned:</span> {selectedTask.assignedTo || 'Unassigned'}</p>
               </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <h4 className="font-semibold mb-2">Due Date</h4>
-                  <p className="text-gray-700">{selectedTask.dueDate}</p>
-                </div>
-                <div>
-                  <h4 className="font-semibold mb-2">Assigned To</h4>
-                  <p className="text-gray-700">{selectedTask.assignedTo}</p>
+              <div className="space-y-2">
+                <p className="text-xs uppercase tracking-[0.35em] text-white/50">Required documents</p>
+                <div className="flex flex-wrap gap-2">
+                  {(selectedTask.requiredDocuments ?? ['Primary proof']).map((doc) => (
+                    <span key={doc} className="data-chip border-white/20 text-white/70">{doc}</span>
+                  ))}
                 </div>
               </div>
-
-              {selectedTask.estimatedCost && (
-                <div>
-                  <h4 className="font-semibold mb-2">Estimated Cost</h4>
-                  <p className="text-gray-700">${selectedTask.estimatedCost.toLocaleString()}</p>
-                </div>
-              )}
-
-              {selectedTask.requiredDocuments && selectedTask.requiredDocuments.length > 0 && (
-                <div>
-                  <h4 className="font-semibold mb-2">Required Documents</h4>
-                  <ul className="text-gray-700 space-y-1">
-                    {selectedTask.requiredDocuments.map((doc, index) => (
-                      <li key={index} className="flex items-center">
-                        <span className="mr-2">📄</span>
-                        {doc}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {selectedTask.filingUrl && (
-                <div>
-                  <h4 className="font-semibold mb-2">Filing URL</h4>
-                  <a
-                    href={selectedTask.filingUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 hover:text-blue-800 underline"
-                  >
-                    {selectedTask.filingUrl}
-                  </a>
-                </div>
-              )}
-
-              <div className="flex gap-2 pt-4">
-                {selectedTask.status === 'pending' && (
+              <div className="flex flex-wrap gap-3">
+                {selectedTask.status !== 'completed' && (
                   <button
-                    onClick={() => {
-                      handleStatusUpdate(selectedTask.id, 'in_progress');
-                      setSelectedTask(null);
-                    }}
-                    className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700"
+                    onClick={() => handleStatusUpdate(selectedTask.id, 'completed')}
+                    className="pressable rounded-2xl border border-emerald-400/40 bg-emerald-600/30 px-4 py-2 text-xs uppercase tracking-[0.3em] text-white"
                   >
-                    Start Task
+                    Mark complete
                   </button>
                 )}
-                {selectedTask.status === 'in_progress' && (
+                {selectedTask.status !== 'in_progress' && (
                   <button
-                    onClick={() => {
-                      handleStatusUpdate(selectedTask.id, 'completed');
-                      setSelectedTask(null);
-                    }}
-                    className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                    onClick={() => handleStatusUpdate(selectedTask.id, 'in_progress')}
+                    className="rounded-2xl border border-white/15 px-4 py-2 text-xs uppercase tracking-[0.3em] text-white/70"
                   >
-                    Mark Complete
+                    In progress
                   </button>
                 )}
-                <button
-                  onClick={() => setSelectedTask(null)}
-                  className="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
-                >
-                  Close
-                </button>
+                {selectedTask.status !== 'pending' && (
+                  <button
+                    onClick={() => handleStatusUpdate(selectedTask.id, 'pending')}
+                    className="rounded-2xl border border-white/15 px-4 py-2 text-xs uppercase tracking-[0.3em] text-white/70"
+                  >
+                    Reset
+                  </button>
+                )}
               </div>
             </div>
-          </div>
-        </div>
-      )}
+          ) : (
+            <div className="text-center text-white/60">
+              <p>Select a task to view contextual details.</p>
+            </div>
+          )}
+        </article>
+      </section>
     </div>
   );
 };
+
 
 // Modern Dashboard Component  
 // DashboardPageProps is now imported from ./types
@@ -2282,22 +1794,8 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ setCurrentPage }) => {
   const dashboardFleetData = useFleetData();
   const fleetHookEnabled = isFleetHookEnabled();
   const { stats: hookFleetStats } = useFleetState({ autoRefresh: true });
+  const { stats: complianceStats, tasks: complianceTasks } = useComplianceData();
   const [fleetStats, setFleetStats] = useState(() => dashboardFleetData.getFleetStats());
-  const [complianceStats, setComplianceStats] = useState(fleetDataManager.getComplianceStats());
-
-  const updateStats = () => {
-    if (fleetHookEnabled) {
-      setComplianceStats(fleetDataManager.getComplianceStats());
-      return;
-    }
-
-    // Get stats from centralized service - single source of truth!
-    const centralizedStats = dashboardFleetData.getFleetStats();
-    const legacyComplianceStats = fleetDataManager.getComplianceStats();
-    
-    setFleetStats(centralizedStats);
-    setComplianceStats(legacyComplianceStats);
-  };
 
   useEffect(() => {
     if (fleetHookEnabled) {
@@ -2305,20 +1803,15 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ setCurrentPage }) => {
     }
 
     const unsubscribeCentralized = dashboardFleetData.subscribe((event: 'data_changed' | 'loading_changed' | 'error') => {
-      console.log('dY"S Dashboard: Centralized service event:', event);
       if (event === 'data_changed') {
-        updateStats();
+        setFleetStats(dashboardFleetData.getFleetStats());
       }
     });
 
-    const unsubscribeFleet = fleetDataManager.subscribe(updateStats);
-
-    // Initial stats load
-    updateStats();
+    setFleetStats(dashboardFleetData.getFleetStats());
 
     return () => {
       unsubscribeCentralized();
-      unsubscribeFleet();
     };
   }, [dashboardFleetData, fleetHookEnabled]);
 
@@ -2340,144 +1833,339 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ setCurrentPage }) => {
       ) {
         return prev;
       }
-
       return next;
     });
   }, [fleetHookEnabled, hookFleetStats]);
 
   const displayedFleetStats = fleetHookEnabled ? hookFleetStats : fleetStats;
+  const activeRatio = displayedFleetStats.total > 0 ? Math.round((displayedFleetStats.active / displayedFleetStats.total) * 100) : 0;
+  const readinessScore = Math.max(0, Math.min(100, 100 - (complianceStats.overdue ?? 0) * 6));
+  const complianceCoverage = displayedFleetStats.total > 0
+    ? Math.max(0, Math.min(100, Math.round(((displayedFleetStats.total - (complianceStats.overdue ?? 0)) / displayedFleetStats.total) * 100)))
+    : 0;
+  const expiringDocuments = displayedFleetStats.expiringDocuments ?? 0;
+
+  const priorityWeight: Record<ComplianceTask['priority'], number> = {
+    critical: 4,
+    high: 3,
+    medium: 2,
+    low: 1
+  };
+
+  const complianceHighlights = complianceTasks
+    .slice()
+    .sort((a, b) => (priorityWeight[b.priority] ?? 0) - (priorityWeight[a.priority] ?? 0))
+    .slice(0, 4);
+
+  const timelineSource = complianceTasks.length > 0
+    ? complianceTasks
+    : [
+        {
+          id: 'seed-1',
+          title: 'Awaiting import',
+          vehicleName: 'Upload VIN manifest',
+          updatedDate: new Date().toISOString(),
+          priority: 'medium',
+          status: 'pending'
+        } as ComplianceTask,
+        {
+          id: 'seed-2',
+          title: 'Activate AI intake',
+          vehicleName: 'Document pipeline',
+          updatedDate: new Date().toISOString(),
+          priority: 'high',
+          status: 'in_progress'
+        } as ComplianceTask
+      ];
+
+  const timelineEvents = timelineSource.slice(0, 5).map((task, index) => {
+    const date = task.updatedDate || task.createdDate;
+    const formatted = date && !Number.isNaN(new Date(date).getTime())
+      ? new Date(date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : 'Now';
+    return {
+      id: `${task.id}-${index}`,
+      title: task.title,
+      detail: task.vehicleName,
+      time: formatted,
+      tone: task.priority
+    };
+  });
+
+  const quickActions = [
+    {
+      title: 'Document intake',
+      description: 'AI-normalize insurance & inspection stacks',
+      badge: 'OCR + reconcile',
+      target: 'onboarding' as AppPage
+    },
+    {
+      title: 'Compliance queue',
+      description: 'Prioritize overdue + critical assets',
+      badge: '7 alerts',
+      target: 'compliance' as AppPage
+    },
+    {
+      title: 'Driver matrix',
+      description: 'Audit CDL & medical expirations',
+      badge: 'Live roster',
+      target: 'drivers' as AppPage
+    }
+  ];
+
+  const formatDueWindow = (task: ComplianceTask) => {
+    if (typeof task.daysUntilDue === 'number') {
+      if (task.daysUntilDue < 0) {
+        return `Overdue by ${Math.abs(task.daysUntilDue)}d`;
+      }
+      if (task.daysUntilDue === 0) {
+        return 'Due today';
+      }
+      return `Due in ${task.daysUntilDue}d`;
+    }
+    if (task.dueDate) {
+      const diff = Math.ceil((new Date(task.dueDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+      if (!Number.isNaN(diff)) {
+        return diff < 0 ? `Overdue by ${Math.abs(diff)}d` : `Due in ${diff}d`;
+      }
+    }
+    return 'Schedule TBD';
+  };
+
+  const readinessArc = {
+    background: `conic-gradient(var(--accent-electric) ${readinessScore * 3.6}deg, rgba(255,255,255,0.08) ${readinessScore * 3.6}deg)`
+  } as React.CSSProperties;
 
   return (
-    <div className="space-y-8">
-      {/* Simplified Welcome Section */}
-      <div className="bg-white rounded-xl p-8 shadow-sm border border-gray-200">
-        <div className="flex items-center justify-between">
+    <div className="space-y-10">
+      <section className="neo-panel grid gap-8 p-8 lg:grid-cols-[1.1fr_0.9fr]">
+        <div className="space-y-6">
+          <div className="flex items-center gap-3 text-xs uppercase tracking-[0.35em] text-white/50">
+            <span className="status-pulse h-2.5 w-2.5 rounded-full bg-[var(--accent-electric)]" />
+            Mission ready
+          </div>
           <div>
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">
-              Fleet Dashboard
-            </h1>
-            <p className="text-gray-600">
-              Overview of your fleet operations
+            <h1 className="font-display text-4xl text-white md:text-5xl">Logistics Command Deck</h1>
+            <p className="mt-3 text-base text-white/60">
+              Live telemetry across fleet health, compliance pressure, and operational readiness in one canvas.
             </p>
           </div>
-          <div className="text-4xl">🚛</div>
+          <div className="grid gap-4 sm:grid-cols-3">
+            {[
+              { label: 'Fleet units', value: displayedFleetStats.total },
+              { label: 'Active coverage', value: `${activeRatio}%` },
+              { label: 'Compliance coverage', value: `${complianceCoverage}%` }
+            ].map((item) => (
+              <div key={item.label} className="rounded-2xl border border-white/10 bg-white/10 px-4 py-4">
+                <p className="text-xs uppercase tracking-[0.3em] text-white/50">{item.label}</p>
+                <p className="mt-2 font-display text-3xl text-white">{item.value}</p>
+              </div>
+            ))}
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="rounded-2xl border border-white/10 bg-white/20 p-4">
+              <p className="text-xs uppercase tracking-[0.3em] text-white/50">Expiring documents</p>
+              <div className="mt-2 flex items-end justify-between">
+                <p className="font-display text-4xl text-white">{expiringDocuments}</p>
+                <span className="data-chip text-white/60">Next 30 days</span>
+              </div>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/20 p-4">
+              <p className="text-xs uppercase tracking-[0.3em] text-white/50">Overdue alerts</p>
+              <div className="mt-2 flex items-end justify-between">
+                <p className="font-display text-4xl text-white">{complianceStats.overdue}</p>
+                <span className="data-chip text-white/60">Critical focus</span>
+              </div>
+            </div>
+          </div>
         </div>
-        
-        {/* Simplified Stats */}
-        <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="bg-gray-50 rounded-lg p-4">
-            <div className="text-2xl font-bold text-gray-900">{displayedFleetStats.total}</div>
-            <div className="text-sm text-gray-600">Total Vehicles</div>
+        <div className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-cyan-900/40 to-slate-900/30 p-8 text-center">
+          <div className="mx-auto h-48 w-48 rounded-full border border-white/10 bg-black/40 p-3">
+            <div className="relative h-full w-full rounded-full border border-white/10">
+              <div className="absolute inset-3 rounded-full" style={readinessArc}>
+                <div className="absolute inset-3 flex flex-col items-center justify-center rounded-full bg-black/80">
+                  <p className="text-xs uppercase tracking-[0.4em] text-white/40">Readiness</p>
+                  <p className="font-display text-4xl text-white">{readinessScore}</p>
+                  <p className="text-xs text-white/50">system score</p>
+                </div>
+              </div>
+            </div>
           </div>
-          <div className="bg-green-50 rounded-lg p-4">
-            <div className="text-2xl font-bold text-green-700">{displayedFleetStats.active}</div>
-            <div className="text-sm text-gray-600">Active</div>
-          </div>
-          <div className="bg-amber-50 rounded-lg p-4">
-            <div className="text-2xl font-bold text-amber-700">{complianceStats.pending}</div>
-            <div className="text-sm text-gray-600">Alerts</div>
-          </div>
-          <div className="bg-emerald-50 rounded-lg p-4">
-            <div className="text-2xl font-bold text-emerald-700">--</div>
-            <div className="text-sm text-gray-600">Compliance</div>
+          <p className="mt-6 text-sm text-white/70">
+            Real-time signal from compliance backlog, active vehicles, and document velocity.
+          </p>
+          <div className="mt-6 flex flex-wrap items-center justify-center gap-3 text-xs text-white/60">
+            <span className="data-chip">{displayedFleetStats.active} active</span>
+            <span className="data-chip">{displayedFleetStats.inactive} idle</span>
+            <span className="data-chip">{complianceStats.critical} critical</span>
           </div>
         </div>
-      </div>
+      </section>
 
-      {/* Simplified Compliance Score */}
-      <div className="bg-white rounded-xl p-8 shadow-sm border border-gray-200">
-        <h3 className="text-xl font-semibold text-gray-900 mb-6">Compliance Status</h3>
-        
-        <div className="flex items-center justify-center mb-6">
-          <div className="relative w-32 h-32">
-            <svg className="w-32 h-32 transform -rotate-90" viewBox="0 0 100 100">
-              <circle cx="50" cy="50" r="35" stroke="#e5e7eb" strokeWidth="8" fill="none" />
-              <circle 
-                cx="50" cy="50" r="35" 
-                stroke="#10b981" strokeWidth="8" fill="none"
-strokeDasharray="0 220"
-                strokeLinecap="round"
-              />
-            </svg>
-            <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span className="text-3xl font-bold text-gray-500">--</span>
-              <span className="text-sm text-gray-600">No Data</span>
+      <section className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+        <article className="neo-panel p-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.35em] text-white/50">Fleet health snapshot</p>
+              <h3 className="font-display text-2xl text-white">Operational pulse</h3>
+            </div>
+            <span className="data-chip text-white/60">Updated {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+          </div>
+          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
+              <p className="text-xs uppercase tracking-[0.3em] text-white/50">Active units</p>
+              <p className="font-display text-3xl text-white">{displayedFleetStats.active}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
+              <p className="text-xs uppercase tracking-[0.3em] text-white/50">Idle / maintenance</p>
+              <p className="font-display text-3xl text-white">{displayedFleetStats.inactive}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
+              <p className="text-xs uppercase tracking-[0.3em] text-white/50">Expiring docs</p>
+              <p className="font-display text-3xl text-white">{expiringDocuments}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
+              <p className="text-xs uppercase tracking-[0.3em] text-white/50">Overdue</p>
+              <p className="font-display text-3xl text-white">{complianceStats.overdue}</p>
             </div>
           </div>
-        </div>
-        
-        <div className="space-y-3">
-          <div className="flex justify-between items-center">
-            <span className="text-gray-700">DOT Compliance</span>
-            <span className="font-semibold text-gray-500">--</span>
+          <div className="mt-8 grid gap-6 lg:grid-cols-2">
+            <div>
+              <div className="flex items-center justify-between text-xs text-white/60">
+                <span>Compliance stability</span>
+                <span>{100 - readinessScore}% load</span>
+              </div>
+              <div className="mt-2 h-3 rounded-full bg-white/10">
+                <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-cyan-400" style={{ width: `${Math.max(15, 100 - readinessScore)}%` }} />
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between text-xs text-white/60">
+                <span>Fleet utilization</span>
+                <span>{activeRatio}%</span>
+              </div>
+              <div className="mt-2 h-3 rounded-full bg-white/10">
+                <div className="h-full rounded-full bg-gradient-to-r from-indigo-400 to-purple-400" style={{ width: `${activeRatio}%` }} />
+              </div>
+            </div>
           </div>
-          <div className="flex justify-between items-center">
-            <span className="text-gray-700">Insurance</span>
-            <span className="font-semibold text-gray-500">--</span>
-          </div>
-          <div className="flex justify-between items-center">
-            <span className="text-gray-700">Inspections</span>
-            <span className="font-semibold text-gray-500">--</span>
-          </div>
-        </div>
-      </div>
+        </article>
 
-      {/* Quick Actions */}
-      <div className="bg-white rounded-xl p-8 shadow-sm border border-gray-200">
-        <h3 className="text-xl font-semibold text-gray-900 mb-6">Quick Actions</h3>
-        
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <button 
-            onClick={() => setCurrentPage('onboarding')}
-            className="flex items-center p-4 bg-blue-50 rounded-lg border border-blue-200 hover:bg-blue-100 transition-colors"
-          >
-            <span className="text-2xl mr-3">📁</span>
-            <div className="text-left">
-              <div className="font-semibold text-gray-900">Add Vehicles</div>
-              <div className="text-sm text-gray-600">Upload or add manually</div>
+        <article className="neo-panel p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.35em] text-white/50">Command shortcuts</p>
+              <h3 className="font-display text-2xl text-white">Workflow stack</h3>
             </div>
-          </button>
-          
-          <button 
-            onClick={() => setCurrentPage('fleet')}
-            className="flex items-center p-4 bg-green-50 rounded-lg border border-green-200 hover:bg-green-100 transition-colors"
-          >
-            <span className="text-2xl mr-3">🚛</span>
-            <div className="text-left">
-              <div className="font-semibold text-gray-900">Manage Fleet</div>
-              <div className="text-sm text-gray-600">View all vehicles</div>
+            <span className="data-chip text-white/60">Actionable</span>
+          </div>
+          <div className="mt-6 space-y-4">
+            {quickActions.map((action) => (
+              <button
+                key={action.title}
+                onClick={() => setCurrentPage(action.target)}
+                className="pressable w-full rounded-2xl border border-white/10 bg-white/10 px-5 py-4 text-left transition"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-display text-lg text-white">{action.title}</p>
+                    <p className="text-sm text-white/60">{action.description}</p>
+                  </div>
+                  <span className="data-chip text-white/60">{action.badge}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </article>
+      </section>
+
+      <section className="grid gap-6 lg:grid-cols-2">
+        <article className="neo-panel grid-stripe p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.35em] text-white/50">Live compliance queue</p>
+              <h3 className="font-display text-2xl text-white">Critical focus</h3>
             </div>
-          </button>
-          
-          <button 
-            onClick={() => setCurrentPage('comprehensive-compliance')}
-            className="flex items-center p-4 bg-purple-50 rounded-lg border border-purple-200 hover:bg-purple-100 transition-colors"
-          >
-            <span className="text-2xl mr-3">🛡️</span>
-            <div className="text-left">
-              <div className="font-semibold text-gray-900">Compliance</div>
-              <div className="text-sm text-gray-600">Monitor alerts</div>
+            <button
+              onClick={() => setCurrentPage('compliance')}
+              className="text-sm text-[var(--accent-electric)] underline-offset-4 hover:underline"
+            >
+              View board
+            </button>
+          </div>
+          <div className="mt-6 space-y-4">
+            {complianceHighlights.length === 0 && (
+              <p className="text-sm text-white/60">No compliance alerts yet � feed is awaiting data.</p>
+            )}
+            {complianceHighlights.map((task) => (
+              <div key={task.id} className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-display text-lg text-white">{task.vehicleName}</p>
+                    <p className="text-sm text-white/60">{task.title}</p>
+                  </div>
+                  <span className="data-chip uppercase tracking-[0.3em] text-white/70">{task.priority}</span>
+                </div>
+                <div className="mt-4 flex items-center justify-between text-xs text-white/60">
+                  <span className="font-mono text-white/70">{task.vehicleVin}</span>
+                  <span>{formatDueWindow(task)}</span>
+                </div>
+                <div className="mt-3 bruteline pt-3 text-xs text-white/50">Status: {task.status}</div>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="neo-panel p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.35em] text-white/50">Telemetry timeline</p>
+              <h3 className="font-display text-2xl text-white">Activity lane</h3>
             </div>
-          </button>
-        </div>
-      </div>
+            <span className="data-chip text-white/60">Live</span>
+          </div>
+          <div className="mt-6 space-y-5">
+            {timelineEvents.map((event) => (
+              <div key={event.id} className="flex items-start gap-4">
+                <div className="pt-1">
+                  <span className="block h-3 w-3 rounded-full bg-[var(--accent-lava)]" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <p className="font-display text-base text-white">{event.title}</p>
+                    <span className="text-xs text-white/50">{event.time}</span>
+                  </div>
+                  <p className="text-sm text-white/60">{event.detail}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </article>
+      </section>
     </div>
   );
 };
 
+
+
 // Main App Component
 function AppContent() {
-  const [currentPage, setCurrentPage] = useState('dashboard');
+  const [currentPage, setCurrentPage] = useState<AppPage>('dashboard');
+  const { stats: headerComplianceStats } = useComplianceData();
 
   // Initialize storage system with PostgreSQL migration on app startup
   useEffect(() => {
     const initializeStorageSystem = async () => {
       try {
-        console.log('🔄 Initializing storage system with PostgreSQL migration...');
-        await persistentFleetStorage.initialize();
-        console.log('✅ Storage system initialized successfully');
+        logger.info('Initializing fleet storage adapter', { component: 'AppContent', layer: 'frontend' });
+        await fleetStorageAdapter.initialize();
+        logger.info('Fleet storage adapter initialized successfully', { component: 'AppContent', layer: 'frontend' });
       } catch (error) {
-        console.warn('⚠️ Storage initialization failed, using fallback mode:', error);
+        logger.warn(
+          'Fleet storage adapter initialization failed; continuing with fallback mode',
+          { component: 'AppContent', layer: 'frontend' },
+          error instanceof Error ? error : undefined
+        );
         // Still allow the app to continue with localStorage fallback
       }
     };
@@ -2485,217 +2173,270 @@ function AppContent() {
     initializeStorageSystem();
   }, []);
 
-  const navItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: '📊' },
-    { id: 'onboarding', label: 'Fleet Onboarding', icon: '📁' },
-    { id: 'fleet', label: 'Fleet Management', icon: '🚛' },
-    { id: 'drivers', label: 'Driver Management', icon: '👨‍💼' },
-    { id: 'compliance', label: 'Compliance', icon: '📋' },
-    { id: 'comprehensive-compliance', label: 'Real-time Compliance', icon: '🛡️' },
-    { id: 'reports', label: 'Reports', icon: '📈' },
-    { id: 'error-testing', label: 'Error Testing', icon: '🧪' }
+  const navItems: NavItem[] = [
+    { id: 'dashboard', label: 'Command Deck', description: 'Live ops + telemetry', icon: IconDashboard },
+    { id: 'onboarding', label: 'Fleet Ingest', description: 'Uploads, OCR & VIN parsing', icon: IconOnboarding },
+    { id: 'fleet', label: 'Asset Graph', description: 'Vehicles & lifecycle control', icon: IconFleet },
+    { id: 'drivers', label: 'Driver Matrix', description: 'Med cards & renewals', icon: IconDrivers },
+    { id: 'compliance', label: 'Compliance Tasks', description: 'Tasks & attestations', icon: IconCompliance },
+    {
+      id: 'comprehensive-compliance',
+      label: 'Live Compliance',
+      description: 'Signal-grade monitoring',
+      icon: IconRealtime
+    },
+    { id: 'reports', label: 'Intelligence', description: 'Reports & exports', icon: IconReports },
+    { id: 'error-testing', label: 'Resilience Lab', description: 'Chaos & recovery drills', icon: IconLab }
   ];
 
+  const pageDescriptions: Record<AppPage, string> = {
+    dashboard: 'A unified operational pulse across vehicles, compliance load, and real-time readiness.',
+    onboarding: 'Pipe in VIN sheets, AI document batches, or manual records with guided oversight.',
+    fleet: 'Searchable, filterable control over every asset, lifecycle state, and document trail.',
+    drivers: 'Monitor medical certificates, CDL renewals, and driver compliance status in one grid.',
+    compliance: 'Triage tasks with contextual documents, SLA timers, and accountable owners.',
+    'comprehensive-compliance': 'Realtime alerting with streaming checks from our compliance intelligence.',
+    reports: 'Produce audit-ready exports and deep-dive analytics for operations and leadership.',
+    'error-testing': 'Run chaos experiments to validate error handling, fallbacks, and system resilience.'
+  };
+
+  const actionMap: Record<AppPage, { label: string; target?: AppPage }> = {
+    dashboard: { label: 'Add Vehicles Batch', target: 'onboarding' },
+    onboarding: { label: 'Review Fleet State', target: 'fleet' },
+    fleet: { label: 'Upload Compliance Docs', target: 'onboarding' },
+    drivers: { label: 'Open Compliance Tasks', target: 'compliance' },
+    compliance: { label: 'Launch Live Compliance', target: 'comprehensive-compliance' },
+    'comprehensive-compliance': { label: 'Log Critical Task', target: 'compliance' },
+    reports: { label: 'Generate Report Pack', target: 'reports' },
+    'error-testing': { label: 'Trigger Chaos Suite', target: 'error-testing' }
+  };
+
+  const headerAction = actionMap[currentPage] ?? actionMap.dashboard;
+  const fleetStatsSnapshot = centralizedFleetDataService.getFleetStats();
+  const user = authService.getCurrentUser();
+  const company = authService.getCurrentCompany();
+  const currentNavItem = navItems.find((item) => item.id === currentPage);
+
+  const quickTelemetry = [
+    { label: 'Active units', value: fleetStatsSnapshot.active ?? 0 },
+    { label: 'Expiring docs', value: fleetStatsSnapshot.expiringDocuments ?? 0 },
+    { label: 'Overdue tasks', value: headerComplianceStats.overdue ?? 0 }
+  ];
+
+  const handlePrimaryAction = () => {
+    if (headerAction.target && headerAction.target !== currentPage) {
+      setCurrentPage(headerAction.target);
+    }
+  };
+
   return (
-    <div className="flex min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
-      {/* Modern Sidebar */}
-      <div className="w-72 bg-gradient-to-b from-slate-800 to-slate-900 text-white shadow-2xl">
-        {/* Header */}
-        <div className="p-6">
-          <div className="flex items-center space-x-3 mb-2">
-            <div className="w-10 h-10 bg-gradient-to-r from-orange-500 to-red-600 rounded-xl flex items-center justify-center text-xl font-bold">
-              🚛
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-white">TruckBo Pro</h1>
-              <p className="text-slate-300 text-sm">Fleet Management</p>
-            </div>
-          </div>
-          
-          {/* User Info */}
-          {authService.getCurrentUser() && (
-            <div className="bg-slate-700/50 rounded-lg p-3 mt-4">
-              <div className="flex items-center space-x-3 mb-2">
-                <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-xs font-bold">
-                  {authService.getCurrentUser()?.firstName?.[0]}{authService.getCurrentUser()?.lastName?.[0]}
-                </div>
-                <div>
-                  <p className="text-white text-sm font-medium">
-                    {authService.getCurrentUser()?.firstName} {authService.getCurrentUser()?.lastName}
-                  </p>
-                  <p className="text-slate-300 text-xs">{authService.getCurrentUser()?.role}</p>
-                </div>
-              </div>
-              <div className="text-slate-300 text-xs mb-2">
-                {authService.getCurrentCompany()?.name}
-              </div>
-              <button
-                onClick={() => authService.logout()}
-                className="w-full text-center px-3 py-2 text-xs bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
-              >
-                Logout
-              </button>
-            </div>
-          )}
-
-          {/* Fleet Overview Badge */}
-          <div className="bg-slate-700/50 rounded-lg p-3 mt-4">
-            <div className="flex justify-between items-center">
-              <span className="text-slate-300 text-sm">Total Fleet</span>
-              <span className="text-white font-bold text-lg">
-                {centralizedFleetDataService.getFleetStats().total}
-              </span>
-            </div>
-            <div className="flex justify-between items-center mt-1">
-              <span className="text-slate-300 text-sm">Compliance Score</span>
-              <span className="text-gray-400 font-bold">--</span>
-            </div>
-            <div className="flex justify-between items-center mt-1">
-              <span className="text-slate-300 text-xs">
-                {centralizedFleetDataService.getFleetStats().total > 0 ? 'Live Fleet Data' : 'No Data'}
-              </span>
-              <span className="text-blue-400 text-xs">
-                {centralizedFleetDataService.getFleetStats().total > 0 ? '🟢 Active' : '⚪ Empty'}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Navigation */}
-        <nav className="p-4 space-y-2">
-          {navItems.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => setCurrentPage(item.id)}
-              className={`w-full text-left px-4 py-4 rounded-xl flex items-center space-x-4 transition-all duration-200 group ${
-                currentPage === item.id 
-                  ? 'bg-gradient-to-r from-blue-600 to-blue-700 shadow-lg transform scale-105' 
-                  : 'hover:bg-slate-700/50 hover:transform hover:translate-x-1'
-              }`}
-            >
-              <span className={`text-2xl transition-transform duration-200 ${
-                currentPage === item.id ? 'transform scale-110' : 'group-hover:scale-110'
-              }`}>
-                {item.icon}
-              </span>
+    <div className="command-shell min-h-screen text-[var(--text-primary)]">
+      <div className="relative grid min-h-screen lg:grid-cols-[320px_1fr]">
+        <aside className="hidden lg:flex flex-col border-r border-white/5 bg-gradient-to-b from-slate-950/80 via-slate-900/70 to-black/80">
+          <div className="px-8 pt-10">
+            <div className="flex items-center justify-between">
               <div>
-                <span className={`font-medium ${
-                  currentPage === item.id ? 'text-white' : 'text-slate-200'
-                }`}>
-                  {item.label}
-                </span>
-                {currentPage === item.id && (
-                  <div className="w-2 h-2 bg-white rounded-full mt-1"></div>
+                <p className="text-xs uppercase tracking-[0.5em] text-white/40">TruckBo</p>
+                <h1 className="font-display text-2xl text-white">Command Surface</h1>
+                <p className="mt-2 text-sm text-white/50">Industrial intelligence for fleets</p>
+              </div>
+              <div className="grid h-12 w-12 place-items-center rounded-2xl border border-white/15 text-lg font-semibold text-white/80">
+                TB
+              </div>
+            </div>
+          </div>
+
+          <div className="px-8 mt-10 space-y-4">
+            {user && (
+              <div className="neo-panel border border-white/10 p-4">
+                <div className="flex items-center gap-3">
+                  <div className="grid h-10 w-10 place-items-center rounded-2xl bg-white/10 font-display text-lg text-white">
+                    {`${user.firstName?.[0] ?? ''}${user.lastName?.[0] ?? ''}` || 'TB'}
+                  </div>
+                  <div>
+                    <p className="font-display text-sm tracking-wide text-white">
+                      {user.firstName} {user.lastName}
+                    </p>
+                    <p className="text-xs uppercase tracking-[0.3em] text-white/50">{user.role}</p>
+                  </div>
+                </div>
+                {company?.name && (
+                  <p className="mt-4 text-xs uppercase tracking-[0.4em] text-white/30">{company.name}</p>
                 )}
-              </div>
-            </button>
-          ))}
-        </nav>
-
-        {/* Bottom Status */}
-        <div className="absolute bottom-0 left-0 right-0 p-4">
-          <div className="flex items-center space-x-2 text-sm text-slate-400">
-            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-            <span>System Online</span>
-          </div>
-          <div className="text-xs text-slate-500 mt-1">
-            Last sync: {new Date().toLocaleTimeString()}
-          </div>
-        </div>
-      </div>
-
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-h-screen">
-        {/* Top Header Bar */}
-        <header className="bg-white/80 backdrop-blur-lg px-8 py-4 shadow-sm">
-          <div className="flex justify-between items-center">
-            <div>
-              <h2 className="text-2xl font-bold text-slate-800">
-                {navItems.find(item => item.id === currentPage)?.label || 'Dashboard'}
-              </h2>
-              <p className="text-slate-600 text-sm mt-1">
-                {currentPage === 'dashboard' && 'Fleet overview and key metrics'}
-                {currentPage === 'onboarding' && 'Add new vehicles to your fleet'}
-                {currentPage === 'fleet' && 'Manage your fleet vehicles'}
-                {currentPage === 'drivers' && 'Track medical certificates and CDL renewals'}
-                {currentPage === 'compliance' && 'Track compliance tasks and deadlines'}
-                {currentPage === 'comprehensive-compliance' && 'Real-time compliance monitoring'}
-                {currentPage === 'reports' && 'Generate compliance reports and analytics'}
-                {currentPage === 'error-testing' && 'Test error handling and recovery mechanisms'}
-              </p>
-            </div>
-            
-            <div className="flex items-center space-x-4">
-              {/* Quick Stats */}
-              <div className="hidden md:flex items-center space-x-6 text-sm">
-                <div className="text-center">
-                  <div className="text-green-600 font-bold text-lg">{centralizedFleetDataService.getFleetStats().active}</div>
-                  <div className="text-slate-500">Active</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-yellow-600 font-bold text-lg">{centralizedFleetDataService.getFleetStats().expiringDocuments}</div>
-                  <div className="text-slate-500">Pending</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-red-600 font-bold text-lg">{fleetDataManager.getComplianceStats().overdue}</div>
-                  <div className="text-slate-500">Overdue</div>
-                </div>
-              </div>
-              
-              {/* Action Button */}
-              <button className="bg-gradient-to-r from-blue-600 to-blue-700 text-white px-6 py-2 rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:scale-105 font-medium">
-                {currentPage === 'onboarding' ? '+ Add Vehicles' : 
-                 currentPage === 'fleet' ? '+ New Vehicle' :
-                 currentPage === 'compliance' ? '+ New Task' :
-                 '+ Quick Action'}
-              </button>
-            </div>
-          </div>
-        </header>
-
-        {/* Page Content */}
-        <main className="flex-1 p-8 overflow-auto">
-          <div className="max-w-7xl mx-auto">
-            {currentPage === 'dashboard' && <DashboardPage setCurrentPage={setCurrentPage} />}
-            {currentPage === 'onboarding' && <OnboardingPage setCurrentPage={setCurrentPage} />}
-            {currentPage === 'fleet' && <FleetPage />}
-            {currentPage === 'drivers' && <DriverManagementPage />}
-            {currentPage === 'reports' && <ReportingDashboard />}
-            {currentPage === 'error-testing' && <ErrorHandlingTestPage />}
-            {currentPage === 'compliance' && <CompliancePage />}
-            {currentPage === 'comprehensive-compliance' && (
-              <ComprehensiveComplianceDashboard 
-                vehicles={fleetDataManager.getAllVehicles().map(v => ({
-                  id: v.id,
-                  vin: v.vin,
-                  make: v.make,
-                  model: v.model,
-                  year: v.year,
-                  dotNumber: v.dotNumber
-                }))}
-              />
-            )}
-            {currentPage === 'reports' && (
-              <div className="text-center py-16">
-                <div className="w-24 h-24 bg-gradient-to-r from-blue-100 to-blue-200 rounded-full flex items-center justify-center mx-auto mb-6">
-                  <span className="text-4xl">📈</span>
-                </div>
-                <h2 className="text-3xl font-bold text-slate-800 mb-4">Advanced Reports</h2>
-                <p className="text-slate-600 text-lg max-w-md mx-auto">
-                  Comprehensive fleet analytics and reporting tools are coming soon to help you make data-driven decisions.
-                </p>
-                <button className="mt-6 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-8 py-4 rounded-2xl font-black text-lg shadow-xl shadow-blue-900/20 hover:shadow-2xl hover:shadow-blue-900/30 transition-all duration-300 hover:scale-105 active:scale-95">
-                  🚀 Request Early Access
+                <button
+                  onClick={() => authService.logout()}
+                  className="mt-4 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.3em] text-white/70 transition hover:border-white/30 hover:text-white"
+                >
+                  Logout
                 </button>
               </div>
             )}
+
+            <div className="neo-panel border border-white/10 p-5">
+              <div className="flex items-center justify-between text-xs uppercase tracking-[0.3em] text-white/50">
+                <span>Total Fleet</span>
+                <span className="font-display text-xl text-white">{fleetStatsSnapshot.total}</span>
+              </div>
+              <div className="mt-4 space-y-2 text-sm text-white/60">
+                <div className="flex items-center justify-between">
+                  <span>Active</span>
+                  <span className="font-display text-white">{fleetStatsSnapshot.active}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Inactive</span>
+                  <span className="font-display text-white/70">{fleetStatsSnapshot.inactive}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Expiring docs</span>
+                  <span className="font-display text-white">{fleetStatsSnapshot.expiringDocuments}</span>
+                </div>
+              </div>
+              <div className="mt-5 rounded-xl border border-white/10 p-3 text-xs text-white/60">
+                <p className="font-mono">Live Telemetry</p>
+                <p className="mt-1 text-white/40">{fleetStatsSnapshot.total > 0 ? 'signal-linked' : 'awaiting ingest'}</p>
+              </div>
+            </div>
           </div>
-        </main>
+
+          <nav className="mt-10 flex-1 space-y-2 overflow-y-auto px-6 pb-6">
+            {navItems.map((item) => {
+              const ItemIcon = item.icon;
+              const isActive = currentPage === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setCurrentPage(item.id)}
+                  className={`pressable flex w-full items-center gap-4 rounded-2xl border px-4 py-4 text-left transition ${
+                    isActive ? 'border-white/30 bg-white/10 shadow-lg' : 'border-white/5 bg-white/0 hover:border-white/15'
+                  }`}
+                >
+                  <div
+                    className={`grid h-11 w-11 place-items-center rounded-2xl ${
+                      isActive ? 'bg-white/15 text-white' : 'bg-white/5 text-white/70'
+                    }`}
+                  >
+                    <ItemIcon />
+                  </div>
+                  <div>
+                    <p className="font-display text-sm tracking-wide text-white">{item.label}</p>
+                    <p className="text-xs text-white/50">{item.description}</p>
+                  </div>
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="px-8 pb-10 text-xs text-white/50">
+            <div className="flex items-center gap-3">
+              <span className="status-pulse h-2.5 w-2.5 rounded-full bg-[var(--accent-electric)]" />
+              <span>{fleetStatsSnapshot.total > 0 ? 'Systems online' : 'Awaiting data sync'}</span>
+            </div>
+            <p className="mt-3 text-white/40">Last sync {new Date().toLocaleTimeString()}</p>
+          </div>
+        </aside>
+
+        <div className="flex flex-col backdrop-blur-xl">
+          <header className="border-b border-white/5 bg-black/30 px-6 py-6 lg:px-12">
+            <div className="flex flex-wrap items-center justify-between gap-6">
+              <div className="space-y-2">
+                <p className="text-xs uppercase tracking-[0.35em] text-white/50">
+                  {currentNavItem?.label ?? 'Command Deck'}
+                </p>
+                <h2 className="font-display text-3xl text-white md:text-4xl">
+                  {currentNavItem?.label ?? 'Command Deck'}
+                </h2>
+                <p className="max-w-2xl text-sm text-white/60">{pageDescriptions[currentPage]}</p>
+              </div>
+
+              <div className="flex flex-col items-stretch gap-4 sm:flex-row sm:items-center">
+                <div className="flex gap-4">
+                  {quickTelemetry.map((metric) => (
+                    <div key={metric.label} className="text-right">
+                      <p className="text-xs uppercase tracking-[0.3em] text-white/50">{metric.label}</p>
+                      <p className="font-display text-2xl text-white">{metric.value}</p>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={handlePrimaryAction}
+                  className="pressable rounded-2xl border border-white/10 bg-gradient-to-r from-emerald-500/80 via-cyan-500/70 to-indigo-500/70 px-6 py-3 font-display text-sm uppercase tracking-[0.4em] text-white shadow-xl shadow-cyan-500/20"
+                >
+                  {headerAction.label}
+                </button>
+              </div>
+            </div>
+            <div className="mt-6 lg:hidden overflow-x-auto">
+              <div className="flex min-w-max gap-3 pb-2">
+                {navItems.map((item) => {
+                  const ItemIcon = item.icon;
+                  const isActive = currentPage === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => setCurrentPage(item.id)}
+                      className={`flex items-center gap-2 rounded-full border px-4 py-2 text-sm ${
+                        isActive ? 'border-white/40 bg-white/10 text-white' : 'border-white/10 text-white/60'
+                      }`}
+                    >
+                      <ItemIcon className="h-4 w-4" />
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </header>
+
+          <main className="flex-1 px-4 py-8 sm:px-6 lg:px-12">
+            <div className="mx-auto w-full max-w-7xl space-y-10">
+              {currentPage === 'dashboard' && <DashboardPage setCurrentPage={setCurrentPage} />}
+              {currentPage === 'onboarding' && <OnboardingPage setCurrentPage={setCurrentPage} />}
+              {currentPage === 'fleet' && <FleetPage />}
+              {currentPage === 'drivers' && <DriverManagementPage />}
+              {currentPage === 'error-testing' && <ErrorHandlingTestPage />}
+              {currentPage === 'compliance' && <CompliancePage />}
+              {currentPage === 'comprehensive-compliance' && (
+                <div className="neo-panel p-0">
+                  <ComprehensiveComplianceDashboard
+                    vehicles={centralizedFleetDataService.getVehicles().map((v) => ({
+                      id: v.id,
+                      vin: v.vin,
+                      make: v.make,
+                      model: v.model,
+                      year: v.year,
+                      dotNumber: v.dotNumber
+                    }))}
+                  />
+                </div>
+              )}
+              {currentPage === 'reports' && (
+                <>
+                  <ReportingDashboard />
+                  <section className="neo-panel grid place-items-center gap-6 px-10 py-12 text-center">
+                    <div className="orbit relative">
+                      <div className="grid h-28 w-28 place-items-center rounded-full bg-white/10 text-3xl text-white">
+                        <IconReports className="h-10 w-10" />
+                      </div>
+                    </div>
+                    <div>
+                      <h2 className="font-display text-3xl text-white">Advanced Reports</h2>
+                      <p className="mt-4 text-white/70">
+                        We are finalizing a cinematic reporting studio with export packs, filters, and anomaly narratives.
+                      </p>
+                    </div>
+                    <button className="pressable rounded-2xl border border-white/20 bg-white/10 px-8 py-3 font-display text-sm uppercase tracking-[0.4em] text-white">
+                      Request Early Access
+                    </button>
+                  </section>
+                </>
+              )}
+            </div>
+          </main>
+        </div>
       </div>
     </div>
   );
 }
-
 // Main App with Error Boundary and Notifications
 function App() {
   return (
@@ -2709,6 +2450,35 @@ function App() {
 }
 
 export default App;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
