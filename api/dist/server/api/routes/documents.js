@@ -11,6 +11,7 @@ const multer_1 = __importDefault(require("multer"));
 const os_1 = __importDefault(require("os"));
 const ApiResponseBuilder_1 = require("../core/ApiResponseBuilder");
 const errorHandling_1 = require("../middleware/errorHandling");
+const authentication_1 = require("../middleware/authentication");
 const apiTypes_1 = require("../types/apiTypes");
 const logger_1 = require("../../../shared/services/logger");
 const googleVisionProcessor_1 = require("../../../shared/services/googleVisionProcessor");
@@ -19,6 +20,7 @@ const router = (0, express_1.Router)();
 // Configure multer for file uploads to disk
 const upload = (0, multer_1.default)({ dest: os_1.default.tmpdir() });
 router.use(errorHandling_1.requestContext);
+router.use(authentication_1.authenticateToken);
 /**
  * POST /api/v1/documents/process
  * Starts asynchronous processing for an uploaded document.
@@ -65,20 +67,35 @@ router.get('/v1/documents/process-status/:jobId', (0, errorHandling_1.asyncHandl
     const decodedJobId = decodeURIComponent(jobId);
     const context = req.context;
     logger_1.logger.info(`Checking status for job ${decodedJobId}`, { ...context, operation: 'GET /documents/process-status' });
-    const result = await googleVisionProcessor_1.googleVisionProcessor.getAsyncResult(decodedJobId);
+    const { status, result: processingResult, job } = await googleVisionProcessor_1.googleVisionProcessor.getAsyncResult(decodedJobId);
     let response;
-    switch (result.status) {
+    switch (status) {
         case 'processing':
-            response = ApiResponseBuilder_1.ApiResponseBuilder.success({ status: 'processing' }, 'Job is still in progress.');
+            response = ApiResponseBuilder_1.ApiResponseBuilder.success({ status: 'processing', job }, 'Job is still in progress.');
             res.status(apiTypes_1.HttpStatus.OK).json(response);
             break;
         case 'succeeded':
-            // Save processing results to database
+            if (!job) {
+                throw errorHandling_1.ApiError.internal('Processing succeeded but job metadata is missing.');
+            }
+            const organizationId = context.companyId ?? req.user?.companyId;
+            if (!organizationId) {
+                throw errorHandling_1.ApiError.unauthorized('Organization context missing for document persistence');
+            }
             try {
-                const saveResult = await saveProcessingResultToDatabase(decodedJobId, result.result, context);
+                const saveResult = await saveProcessingResultToDatabase(decodedJobId, processingResult, job, context, organizationId);
+                if (saveResult.success) {
+                    try {
+                        await googleVisionProcessor_1.googleVisionProcessor.finalizeJob(decodedJobId);
+                    }
+                    catch (cleanupError) {
+                        logger_1.logger.warn('Failed to finalize job after persistence', { ...context, operation: 'cleanup' }, cleanupError);
+                    }
+                }
                 response = ApiResponseBuilder_1.ApiResponseBuilder.success({
                     status: 'succeeded',
-                    ...result.result,
+                    ...processingResult,
+                    job,
                     database: {
                         saved: saveResult.success,
                         documentId: saveResult.documentId,
@@ -95,7 +112,8 @@ router.get('/v1/documents/process-status/:jobId', (0, errorHandling_1.asyncHandl
                 // Still return success for the processing, but include database error
                 response = ApiResponseBuilder_1.ApiResponseBuilder.success({
                     status: 'succeeded',
-                    ...result.result,
+                    ...processingResult,
+                    job,
                     database: {
                         saved: false,
                         error: `Database save failed: ${dbError instanceof Error ? dbError.message : 'Unknown error'}`
@@ -105,7 +123,7 @@ router.get('/v1/documents/process-status/:jobId', (0, errorHandling_1.asyncHandl
             }
             break;
         case 'failed':
-            response = ApiResponseBuilder_1.ApiResponseBuilder.error(apiTypes_1.ApiErrorCode.PROCESSING_FAILED, 'Document processing failed.', result.result);
+            response = ApiResponseBuilder_1.ApiResponseBuilder.error(apiTypes_1.ApiErrorCode.PROCESSING_FAILED, 'Document processing failed.', 'Document processing failed.', { details: { context: { job, result: processingResult } } });
             res.status(apiTypes_1.HttpStatus.OK).json(response); // Return 200 but with an error status in the body
             break;
         default:
@@ -115,23 +133,37 @@ router.get('/v1/documents/process-status/:jobId', (0, errorHandling_1.asyncHandl
 /**
  * Helper function to save Google Vision processing results to database
  */
-async function saveProcessingResultToDatabase(jobId, processingResult, context) {
-    // TODO: For now, using a placeholder organization ID - this should come from auth context
-    const organizationId = '550e8400-e29b-41d4-a716-446655440000'; // Sample org from schema
+async function saveProcessingResultToDatabase(jobId, processingResult, job, context, organizationId) {
     // Determine document type from extracted data
     const documentType = determineDocumentType(processingResult);
     const documentCategory = documentType === 'medical_certificate' || documentType === 'cdl'
         ? 'driver_docs'
         : 'vehicle_docs';
+    const extractionData = {
+        ...processingResult,
+        jobMetadata: {
+            jobId,
+            originalFilename: job.originalFilename,
+            gcsInputBucket: job.gcsInputBucket,
+            gcsInputObject: job.gcsInputObject,
+            gcsOutputBucket: job.gcsOutputBucket,
+            gcsOutputPrefix: job.gcsOutputPrefix,
+            resultObject: job.resultObject
+        }
+    };
     // Create document record
     const documentRecord = {
         organizationId,
         documentType,
         documentCategory,
-        originalFilename: jobId, // Use jobId as placeholder - in real implementation, store original filename
-        s3Key: jobId, // Use jobId as S3 key placeholder
+        originalFilename: job.originalFilename,
+        fileSize: job.fileSize ?? undefined,
+        fileType: job.mimeType ?? undefined,
+        s3Bucket: job.gcsInputBucket,
+        s3Key: job.gcsInputObject,
+        s3Url: `gs://${job.gcsInputBucket}/${job.gcsInputObject}`,
         ocrText: processingResult.text,
-        extractionData: processingResult,
+        extractionData,
         extractionConfidence: processingResult.extractionConfidence || 0.5,
         processingStatus: 'completed',
         processingErrors: processingResult.warnings || [],

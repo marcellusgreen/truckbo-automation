@@ -25,17 +25,12 @@ Record quick walkthroughs (video or scripted notes) for the flows most likely to
    - Poll the status screen until completion.
    - Inspect Network tab for `/api/v1/documents/process-status/:jobId` responses that include `jobMetadata`, ensuring the Neon-backed flow (per `docs/agents.md`) is operational.
 5. **Compliance Dashboard Refresh**
-   - Visit _Comprehensive Compliance_ and verify cards read from `fleetDataManager.getAllVehicles()` / `centralizedFleetDataService` without stale data.
+   - Visit _Comprehensive Compliance_ and verify cards reflect the API-backed `useComplianceData` results with no stale data or console errors.
 
 Document results in `docs/refactor/src-app/artifacts/smoke-<date>.md` with timestamps, screenshots, or console snippets as proof points.
 
-## 3. Telemetry & Logging Baseline
-Before refactoring, instrument temporary logging (globally toggleable) to understand call frequencies:
-- Wrap `persistentFleetStorage.addVehicles`, `persistentFleetStorage.updateVehicle`, and `persistentFleetStorage.clearFleet` to log inputs, caller IDs, and success/failure. Use `logger.debug` with a `refactorBaseline` flag so it can be disabled later.
-- Instrument `centralizedFleetDataService.addVehicles` and `centralizedFleetDataService.clearAllFleetData` to log transition states (backup created, reconciler sync invoked, rollback triggered).
-- Subscribe once to `eventBus` inside a dev-only initializer to dump each `FleetEvents.*` dispatch. Confirm whether UI still depends on these events or the centralized service already covers refreshes.
-
-Capture representative logs for the four core flows (manual add, bulk add, document upload, reconciler refresh) and store them under `docs/refactor/src-app/artifacts/logs-<date>.md` with annotations.
+## 3. Telemetry & Logging Baseline (Retired)
+The temporary refactor instrumentation (`VITE_REFACTOR_DEBUG`, event bus mirrors) has been removed. Rely on standard API/server logs when capturing baseline evidence.
 
 ## 4. Data Shape Snapshots
 - Export sample payloads from:

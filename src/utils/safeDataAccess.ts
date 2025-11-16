@@ -7,9 +7,10 @@
 // ===== SAFE ACCESSOR FUNCTIONS =====
 
 /**
- * Safely get a string value with fallback
+ * Safely get a string value with fallback. Defaults to an empty string so optional
+ * fields do not render unreadable placeholder characters in the UI.
  */
-export const safeString = (value: any, fallback: string = '—'): string => {
+export const safeString = (value: any, fallback: string = ''): string => {
   if (value === null || value === undefined || value === '') {
     return fallback;
   }

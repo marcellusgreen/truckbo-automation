@@ -1,9 +1,42 @@
 "use strict";
 // Document Storage Service
 // Handles saving document processing results to Neon database
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.documentStorage = void 0;
-const db_1 = require("./db");
+const db_1 = __importStar(require("./db"));
 const logger_1 = require("./logger");
 class DocumentStorage {
     constructor() {
@@ -15,14 +48,15 @@ class DocumentStorage {
         });
     }
     /**
-     * Save document processing results to database
-     */
+       * Save document processing results to database
+       */
     async saveDocumentResult(documentRecord, extractedData) {
         const result = {
             success: false,
             warnings: [],
             errors: []
         };
+        const client = await db_1.default.connect();
         try {
             logger_1.logger.info('Saving document processing result', {
                 ...this.context,
@@ -31,17 +65,17 @@ class DocumentStorage {
                 documentType: documentRecord.documentType,
                 filename: documentRecord.originalFilename
             });
-            // Start transaction
-            await (0, db_1.query)('BEGIN', []);
+            await client.query('BEGIN');
+            const exec = (text, params) => client.query(text, params);
             try {
                 // 1. Save document record
-                const documentId = await this.insertDocumentRecord(documentRecord);
+                const documentId = await this.insertDocumentRecord(documentRecord, exec);
                 result.documentId = documentId;
                 // 2. Create or update vehicle/driver records based on extracted data
                 if (extractedData) {
                     if ('vin' in extractedData) {
                         // Vehicle document
-                        const vehicleResult = await this.handleVehicleData(extractedData, documentRecord.organizationId, documentId);
+                        const vehicleResult = await this.handleVehicleData(extractedData, documentRecord.organizationId, documentId, exec);
                         result.vehicleId = vehicleResult.vehicleId;
                         if (vehicleResult.warnings)
                             result.warnings?.push(...vehicleResult.warnings);
@@ -50,7 +84,7 @@ class DocumentStorage {
                     }
                     else {
                         // Driver document
-                        const driverResult = await this.handleDriverData(extractedData, documentRecord.organizationId, documentId);
+                        const driverResult = await this.handleDriverData(extractedData, documentRecord.organizationId, documentId, exec);
                         result.driverId = driverResult.driverId;
                         if (driverResult.warnings)
                             result.warnings?.push(...driverResult.warnings);
@@ -60,10 +94,9 @@ class DocumentStorage {
                 }
                 // 3. Update document record with entity associations
                 if (result.vehicleId || result.driverId) {
-                    await this.updateDocumentAssociations(documentId, result.vehicleId, result.driverId);
+                    await this.updateDocumentAssociations(documentId, result.vehicleId, result.driverId, exec);
                 }
-                // Commit transaction
-                await (0, db_1.query)('COMMIT', []);
+                await client.query('COMMIT');
                 result.success = true;
                 logger_1.logger.info('Document processing result saved successfully', {
                     ...this.context,
@@ -75,7 +108,7 @@ class DocumentStorage {
                 });
             }
             catch (error) {
-                await (0, db_1.query)('ROLLBACK', []);
+                await client.query('ROLLBACK');
                 throw error;
             }
         }
@@ -83,12 +116,15 @@ class DocumentStorage {
             logger_1.logger.error('Failed to save document processing result', this.context, error);
             result.errors?.push(`Database save failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
+        finally {
+            client.release();
+        }
         return result;
     }
     /**
      * Insert document record into database
      */
-    async insertDocumentRecord(doc) {
+    async insertDocumentRecord(doc, exec = db_1.query) {
         const insertQuery = `
       INSERT INTO documents (
         organization_id, document_type, document_category, original_filename,
@@ -119,13 +155,13 @@ class DocumentStorage {
             doc.uploadedBy,
             doc.processedAt || new Date().toISOString()
         ];
-        const res = await (0, db_1.query)(insertQuery, values);
+        const res = await exec(insertQuery, values);
         return res.rows[0].id;
     }
     /**
      * Handle vehicle data - create or update vehicle record with conflict resolution
      */
-    async handleVehicleData(data, organizationId, documentId) {
+    async handleVehicleData(data, organizationId, documentId, exec = db_1.query) {
         const result = {
             warnings: [],
             errors: []
@@ -142,7 +178,7 @@ class DocumentStorage {
             }
             // Check if vehicle exists by VIN
             const vehicleQuery = 'SELECT id, make, model, year, license_plate FROM vehicles WHERE vin = $1 AND organization_id = $2';
-            const vehicleRes = await (0, db_1.query)(vehicleQuery, [data.vin, organizationId]);
+            const vehicleRes = await exec(vehicleQuery, [data.vin, organizationId]);
             if (vehicleRes.rows.length > 0) {
                 // Vehicle exists - check for conflicts before updating
                 result.vehicleId = vehicleRes.rows[0].id;
@@ -152,7 +188,7 @@ class DocumentStorage {
                     result.warnings?.push(...conflicts.map(c => `Conflict detected: ${c}`));
                     // For high-confidence extractions, update anyway but log conflicts
                     if ((data.extractionConfidence || 0) > 0.8) {
-                        await this.updateVehicleFromExtractedData(result.vehicleId, data);
+                        await this.updateVehicleFromExtractedData(result.vehicleId, data, exec);
                         result.warnings?.push('Updated existing vehicle record despite conflicts (high confidence)');
                     }
                     else {
@@ -160,18 +196,18 @@ class DocumentStorage {
                     }
                 }
                 else {
-                    await this.updateVehicleFromExtractedData(result.vehicleId, data);
+                    await this.updateVehicleFromExtractedData(result.vehicleId, data, exec);
                     result.warnings?.push('Updated existing vehicle record');
                 }
             }
             else {
                 // Check for potential duplicates by license plate or truck number
-                const duplicateChecks = await this.checkVehicleDuplicates(data, organizationId);
+                const duplicateChecks = await this.checkVehicleDuplicates(data, organizationId, exec);
                 if (duplicateChecks.length > 0) {
                     result.warnings?.push(...duplicateChecks.map(d => `Potential duplicate: ${d}`));
                 }
                 // Create new vehicle
-                result.vehicleId = await this.createVehicleFromExtractedData(data, organizationId);
+                result.vehicleId = await this.createVehicleFromExtractedData(data, organizationId, exec);
                 result.warnings?.push('Created new vehicle record');
             }
         }
@@ -184,7 +220,7 @@ class DocumentStorage {
     /**
      * Handle driver data - create or update driver record with conflict resolution
      */
-    async handleDriverData(data, organizationId, documentId) {
+    async handleDriverData(data, organizationId, documentId, exec = db_1.query) {
         const result = {
             warnings: [],
             errors: []
@@ -205,7 +241,7 @@ class DocumentStorage {
                 driverQuery = 'SELECT id, first_name, last_name, date_of_birth, cdl_number FROM drivers WHERE first_name = $1 AND last_name = $2 AND organization_id = $3';
                 driverParams = [data.firstName, data.lastName, organizationId];
             }
-            const driverRes = await (0, db_1.query)(driverQuery, driverParams);
+            const driverRes = await exec(driverQuery, driverParams);
             if (driverRes.rows.length > 0) {
                 // Driver exists - check for conflicts before updating
                 result.driverId = driverRes.rows[0].id;
@@ -215,7 +251,7 @@ class DocumentStorage {
                     result.warnings?.push(...conflicts.map(c => `Conflict detected: ${c}`));
                     // For high-confidence extractions, update anyway but log conflicts
                     if ((data.extractionConfidence || 0) > 0.8) {
-                        await this.updateDriverFromExtractedData(result.driverId, data);
+                        await this.updateDriverFromExtractedData(result.driverId, data, exec);
                         result.warnings?.push('Updated existing driver record despite conflicts (high confidence)');
                     }
                     else {
@@ -223,18 +259,18 @@ class DocumentStorage {
                     }
                 }
                 else {
-                    await this.updateDriverFromExtractedData(result.driverId, data);
+                    await this.updateDriverFromExtractedData(result.driverId, data, exec);
                     result.warnings?.push('Updated existing driver record');
                 }
             }
             else {
                 // Check for potential duplicates
-                const duplicateChecks = await this.checkDriverDuplicates(data, organizationId);
+                const duplicateChecks = await this.checkDriverDuplicates(data, organizationId, exec);
                 if (duplicateChecks.length > 0) {
                     result.warnings?.push(...duplicateChecks.map(d => `Potential duplicate: ${d}`));
                 }
                 // Create new driver
-                result.driverId = await this.createDriverFromExtractedData(data, organizationId);
+                result.driverId = await this.createDriverFromExtractedData(data, organizationId, exec);
                 result.warnings?.push('Created new driver record');
             }
         }
@@ -247,7 +283,7 @@ class DocumentStorage {
     /**
      * Create new vehicle from extracted data
      */
-    async createVehicleFromExtractedData(data, organizationId) {
+    async createVehicleFromExtractedData(data, organizationId, exec = db_1.query) {
         const insertQuery = `
       INSERT INTO vehicles (
         organization_id, vin, make, model, year, license_plate, truck_number,
@@ -276,13 +312,13 @@ class DocumentStorage {
             data.coverageAmount,
             data.needsReview ? 'unknown' : 'compliant'
         ];
-        const res = await (0, db_1.query)(insertQuery, values);
+        const res = await exec(insertQuery, values);
         return res.rows[0].id;
     }
     /**
      * Update existing vehicle from extracted data
      */
-    async updateVehicleFromExtractedData(vehicleId, data) {
+    async updateVehicleFromExtractedData(vehicleId, data, exec = db_1.query) {
         const updates = [];
         const values = [];
         let paramIndex = 1;
@@ -350,13 +386,13 @@ class DocumentStorage {
         if (updates.length > 0) {
             values.push(vehicleId);
             const updateQuery = `UPDATE vehicles SET ${updates.join(', ')} WHERE id = $${paramIndex}`;
-            await (0, db_1.query)(updateQuery, values);
+            await exec(updateQuery, values);
         }
     }
     /**
      * Create new driver from extracted data
      */
-    async createDriverFromExtractedData(data, organizationId) {
+    async createDriverFromExtractedData(data, organizationId, exec = db_1.query) {
         const insertQuery = `
       INSERT INTO drivers (
         organization_id, first_name, last_name, date_of_birth,
@@ -388,13 +424,13 @@ class DocumentStorage {
             data.medicalRestrictions,
             data.needsReview ? 'unknown' : 'valid'
         ];
-        const res = await (0, db_1.query)(insertQuery, values);
+        const res = await exec(insertQuery, values);
         return res.rows[0].id;
     }
     /**
      * Update existing driver from extracted data
      */
-    async updateDriverFromExtractedData(driverId, data) {
+    async updateDriverFromExtractedData(driverId, data, exec = db_1.query) {
         const updates = [];
         const values = [];
         let paramIndex = 1;
@@ -462,15 +498,15 @@ class DocumentStorage {
         if (updates.length > 0) {
             values.push(driverId);
             const updateQuery = `UPDATE drivers SET ${updates.join(', ')} WHERE id = $${paramIndex}`;
-            await (0, db_1.query)(updateQuery, values);
+            await exec(updateQuery, values);
         }
     }
     /**
      * Update document record with entity associations
      */
-    async updateDocumentAssociations(documentId, vehicleId, driverId) {
+    async updateDocumentAssociations(documentId, vehicleId, driverId, exec = db_1.query) {
         const updateQuery = 'UPDATE documents SET vehicle_id = $1, driver_id = $2 WHERE id = $3';
-        await (0, db_1.query)(updateQuery, [vehicleId || null, driverId || null, documentId]);
+        await exec(updateQuery, [vehicleId || null, driverId || null, documentId]);
     }
     /**
      * Detect conflicts between existing vehicle data and extracted data
@@ -495,19 +531,19 @@ class DocumentStorage {
     /**
      * Check for potential vehicle duplicates by license plate or truck number
      */
-    async checkVehicleDuplicates(data, organizationId) {
+    async checkVehicleDuplicates(data, organizationId, exec = db_1.query) {
         const warnings = [];
         try {
             if (data.licensePlate) {
                 const plateQuery = 'SELECT id, vin FROM vehicles WHERE license_plate = $1 AND organization_id = $2 AND vin != $3';
-                const plateRes = await (0, db_1.query)(plateQuery, [data.licensePlate, organizationId, data.vin]);
+                const plateRes = await exec(plateQuery, [data.licensePlate, organizationId, data.vin]);
                 if (plateRes.rows.length > 0) {
                     warnings.push(`License plate '${data.licensePlate}' already exists for VIN ${plateRes.rows[0].vin}`);
                 }
             }
             if (data.truckNumber) {
                 const truckQuery = 'SELECT id, vin FROM vehicles WHERE truck_number = $1 AND organization_id = $2 AND vin != $3';
-                const truckRes = await (0, db_1.query)(truckQuery, [data.truckNumber, organizationId, data.vin]);
+                const truckRes = await exec(truckQuery, [data.truckNumber, organizationId, data.vin]);
                 if (truckRes.rows.length > 0) {
                     warnings.push(`Truck number '${data.truckNumber}' already exists for VIN ${truckRes.rows[0].vin}`);
                 }
@@ -545,12 +581,12 @@ class DocumentStorage {
     /**
      * Check for potential driver duplicates
      */
-    async checkDriverDuplicates(data, organizationId) {
+    async checkDriverDuplicates(data, organizationId, exec = db_1.query) {
         const warnings = [];
         try {
             if (data.cdlNumber) {
                 const cdlQuery = 'SELECT id, first_name, last_name FROM drivers WHERE cdl_number = $1 AND organization_id = $2';
-                const cdlRes = await (0, db_1.query)(cdlQuery, [data.cdlNumber, organizationId]);
+                const cdlRes = await exec(cdlQuery, [data.cdlNumber, organizationId]);
                 if (cdlRes.rows.length > 0) {
                     warnings.push(`CDL number '${data.cdlNumber}' already exists for ${cdlRes.rows[0].first_name} ${cdlRes.rows[0].last_name}`);
                 }

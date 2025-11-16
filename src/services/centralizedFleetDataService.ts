@@ -3,7 +3,6 @@
 
 import { persistentFleetStorage, type VehicleRecord } from './persistentFleetStorage';
 import { reconcilerAPI, VehicleSummaryView, FleetDashboard } from './reconcilerAPI';
-import { eventBus, FleetEvents } from './eventBus';
 import { ExtractedVehicleData } from './documentProcessor';
 import { authService } from './authService';
 import { isRefactorDebugEnabled, startRefactorTimer, refactorDebugLog } from '../utils/refactorDebug';
@@ -63,13 +62,7 @@ class CentralizedFleetDataService {
   // Backup for rollback operations
   private lastBackup: Map<string, UnifiedVehicleData> | null = null;
 
-  constructor() {
-    // Subscribe to event bus for automatic sync
-    eventBus.subscribe('fleet_data_changed', () => {
-      console.log('[FleetData] Event bus triggered, refreshing data');
-      this.initializeData();
-    });
-  }
+  constructor() {}
 
   /**
    * Get all vehicles - SINGLE SOURCE OF TRUTH

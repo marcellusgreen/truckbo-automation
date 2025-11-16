@@ -18,7 +18,8 @@ const getEnvValue = (key: string): string => {
 };
 
 const defaultFlags: Record<string, boolean> = {
-  VITE_USE_FLEET_HOOK: true
+  VITE_USE_FLEET_HOOK: true,
+  VITE_USE_ONBOARDING_HOOK: true
 };
 
 const isFlagEnabled = (key: string): boolean => {
@@ -34,5 +35,7 @@ const isFlagEnabled = (key: string): boolean => {
 export const isFleetAdapterEnabled = (): boolean => isFlagEnabled('VITE_USE_FLEET_ADAPTER');
 
 export const isFleetHookEnabled = (): boolean => isFlagEnabled('VITE_USE_FLEET_HOOK');
+
+export const isOnboardingHookEnabled = (): boolean => isFlagEnabled('VITE_USE_ONBOARDING_HOOK');
 
 export const isRefactorDebugEnabledFlag = (): boolean => isFlagEnabled('VITE_REFACTOR_DEBUG');

@@ -5,7 +5,6 @@
  */
 
 import { vehicleReconciler, type ReconcilerStats } from './vehicleReconciler';
-import { FleetEvents } from './eventBus';
 import { logger, LogContext } from './logger';
 import { errorHandler, withErrorHandling } from './errorHandlingService';
 
@@ -619,8 +618,6 @@ class ReconcilerAPI {
         logger.debug('Dashboard cache cleared after document addition', context);
         
         // Emit event for document processing
-        FleetEvents.documentProcessed(documentData, result.vehicleVIN, 'reconcilerAPI');
-        
         logger.endOperation('Adding document to reconciliation system', operationId, context, {
           vehicleVIN: result.vehicleVIN,
           conflictCount: result.conflicts?.length || 0,
@@ -665,7 +662,6 @@ class ReconcilerAPI {
     this.dashboardCache = null;
     
     // Emit event for cache clearing
-    FleetEvents.cacheCleared('reconcilerAPI', 'reconcilerAPI');
   }
 
   /**

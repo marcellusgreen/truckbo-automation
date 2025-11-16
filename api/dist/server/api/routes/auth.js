@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.authenticateToken = authenticateToken;
+exports.authenticateToken = void 0;
 const express_1 = require("express");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
@@ -348,20 +348,6 @@ router.post('/v1/auth/register', authRateLimit, async (req, res) => {
 /**
  * Middleware to authenticate JWT tokens
  */
-function authenticateToken(req, res, next) {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    if (!token) {
-        const response = ApiResponseBuilder_1.ApiResponseBuilder.unauthorized('Access token required', { requestId: req.context?.requestId, version: req.context?.apiVersion });
-        return res.status(401).json(response);
-    }
-    jsonwebtoken_1.default.verify(token, JWT_SECRET, (err, user) => {
-        if (err) {
-            const response = ApiResponseBuilder_1.ApiResponseBuilder.forbidden('Invalid or expired token', undefined, { requestId: req.context?.requestId, version: req.context?.apiVersion });
-            return res.status(403).json(response);
-        }
-        req.user = user;
-        next();
-    });
-}
+var authentication_1 = require("../middleware/authentication");
+Object.defineProperty(exports, "authenticateToken", { enumerable: true, get: function () { return authentication_1.authenticateToken; } });
 exports.default = router;

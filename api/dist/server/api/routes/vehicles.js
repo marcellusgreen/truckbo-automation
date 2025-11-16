@@ -5,13 +5,16 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const ApiResponseBuilder_1 = require("../core/ApiResponseBuilder");
 const errorHandling_1 = require("../middleware/errorHandling");
+const authentication_1 = require("../middleware/authentication");
 const VehicleTransformer_1 = require("../transformers/VehicleTransformer");
 const apiTypes_1 = require("../types/apiTypes");
 const logger_1 = require("../../../shared/services/logger");
 const neonFleetStorage_1 = require("../../../shared/services/neonFleetStorage");
+const truckNumberParser_1 = require("../../../shared/utils/truckNumberParser");
 const router = (0, express_1.Router)();
-// Apply request context middleware to all routes
+// Apply request context + authentication middleware to all routes
 router.use(errorHandling_1.requestContext);
+router.use(authentication_1.authenticateToken);
 /**
  * GET /api/v1/vehicles
  * Get all vehicles with optional filtering and pagination
@@ -135,7 +138,33 @@ router.post('/v1/vehicles', (0, errorHandling_1.asyncHandler)(async (req, res) =
     const context = req.context;
     const startTime = Date.now();
     try {
-        const vehicleInput = req.body;
+        const rawVehicleInput = (req.body || {});
+        const organizationId = context.companyId ?? req.user?.companyId;
+        if (!organizationId) {
+            throw errorHandling_1.ApiError.unauthorized('Organization context is required to manage vehicles');
+        }
+        const vehicleInput = {
+            ...rawVehicleInput,
+            vin: rawVehicleInput.vin?.trim().toUpperCase(),
+            make: rawVehicleInput.make?.trim(),
+            model: rawVehicleInput.model?.trim(),
+            licensePlate: rawVehicleInput.licensePlate?.trim().toUpperCase(),
+            dotNumber: rawVehicleInput.dotNumber?.trim(),
+            truckNumber: rawVehicleInput.truckNumber?.trim()
+        };
+        if (!vehicleInput.truckNumber) {
+            const generatedTruck = truckNumberParser_1.truckNumberParser.parseTruckNumber({
+                vin: vehicleInput.vin ?? '',
+                licensePlate: vehicleInput.licensePlate ?? '',
+                dotNumber: vehicleInput.dotNumber,
+                make: vehicleInput.make,
+                model: vehicleInput.model,
+                registrationNumber: vehicleInput.registration?.number,
+                insuranceCarrier: vehicleInput.insurance?.carrier,
+                policyNumber: vehicleInput.insurance?.policyNumber
+            });
+            vehicleInput.truckNumber = generatedTruck.truckNumber;
+        }
         // Validate required fields
         if (!vehicleInput.vin || !vehicleInput.make || !vehicleInput.model ||
             !vehicleInput.year || !vehicleInput.licensePlate || !vehicleInput.truckNumber) {
@@ -165,12 +194,21 @@ router.post('/v1/vehicles', (0, errorHandling_1.asyncHandler)(async (req, res) =
         }, { vin: vehicleInput.vin, truckNumber: vehicleInput.truckNumber });
         // Check if vehicle with this VIN already exists
         const existingVehicles = await neonFleetStorage_1.neonFleetStorage.getAllVehicles();
-        const existingVehicle = existingVehicles.find((v) => v.vin === vehicleInput.vin);
+        const existingVehicle = existingVehicles.find((v) => {
+            const existingOrgId = v.organizationId ?? v.organization_id;
+            return v.vin === vehicleInput.vin && (!existingOrgId || existingOrgId === organizationId);
+        });
         let savedVehicle;
         let isUpdate = false;
         if (existingVehicle) {
             // Update existing vehicle
-            const updateData = VehicleTransformer_1.vehicleTransformer.reverseInput(vehicleInput);
+            const targetOrganizationId = existingVehicle.organizationId ??
+                existingVehicle.organization_id ??
+                organizationId;
+            const updateData = {
+                ...VehicleTransformer_1.vehicleTransformer.reverseInput(vehicleInput),
+                organizationId: targetOrganizationId
+            };
             const updatedVehicle = await neonFleetStorage_1.neonFleetStorage.updateVehicle(existingVehicle.id, updateData);
             if (!updatedVehicle) {
                 return ApiResponseBuilder_1.ApiResponseBuilder.error('RESOURCE_NOT_FOUND', 'Vehicle not found', 'The requested vehicle could not be found', {
@@ -190,7 +228,10 @@ router.post('/v1/vehicles', (0, errorHandling_1.asyncHandler)(async (req, res) =
         }
         else {
             // Create new vehicle
-            const newVehicleData = VehicleTransformer_1.vehicleTransformer.reverseInput(vehicleInput);
+            const newVehicleData = {
+                ...VehicleTransformer_1.vehicleTransformer.reverseInput(vehicleInput),
+                organizationId
+            };
             savedVehicle = await neonFleetStorage_1.neonFleetStorage.addVehicle({
                 ...newVehicleData,
                 id: `vehicle_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
